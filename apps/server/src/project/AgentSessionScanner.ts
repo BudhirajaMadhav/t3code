@@ -12,6 +12,7 @@ import {
   type AgentSessionProjectGit,
   type AgentSessionScanResult,
   type ProviderInstanceConfig,
+  type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +38,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ServerSettings from "../serverSettings.ts";
+import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import {
   createTranscriptJsonReader,
   createTranscriptJsonSelector,
@@ -140,17 +142,12 @@ export interface AgentSessionThread {
   readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
 }
 
-export interface AgentSessionWorktree {
-  readonly path: string;
-  readonly branch: string | null;
-}
-
 export type AgentSessionRecentThread =
   | {
       readonly _tag: "Importable";
       readonly thread: AgentSessionThread;
       readonly source: AgentSessionImportSource;
-      readonly worktree: AgentSessionWorktree | null;
+      readonly worktree: { readonly path: string; readonly branch: string | null } | null;
     }
   | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
   | { readonly _tag: "Duplicate"; readonly source: AgentSessionImportSource }
@@ -521,13 +518,14 @@ function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
 
 function isT3ManagedWorktree(
   candidatePath: string,
-  worktreesDir: string,
+  worktreesDirectories: ReadonlyArray<string>,
   caseFold: boolean,
 ): boolean {
   const normalized = normalizeForWorktreeMatch(candidatePath, caseFold);
   return (
-    normalized.startsWith(normalizeForWorktreeMatch(worktreesDir, caseFold)) ||
-    normalized.includes("/.t3/worktrees/")
+    worktreesDirectories.some((directory) =>
+      normalized.startsWith(normalizeForWorktreeMatch(directory, caseFold)),
+    ) || normalized.includes("/.t3/worktrees/")
   );
 }
 
@@ -591,6 +589,9 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const readSettings = serverSettings.getSettings.pipe(
+    Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
+  );
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
@@ -608,7 +609,10 @@ export const make = Effect.gen(function* () {
     path.join(homeDir, "Documents", "Codex"),
   ];
 
-  const isExcludedProjectPath = (candidatePath: string) =>
+  const isExcludedProjectPath = (
+    candidatePath: string,
+    managedDirectories: ReadonlyArray<string> = [worktreesDir],
+  ) =>
     excludedProjectRoots.has(normalizeProjectPathForComparison(candidatePath)) ||
     excludedProjectAncestors.some((ancestor) =>
       normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
@@ -618,7 +622,7 @@ export const make = Effect.gen(function* () {
     normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
       normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
     ) ||
-    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase);
+    isT3ManagedWorktree(candidatePath, managedDirectories, foldWorktreeCase);
 
   const listDirectory = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -641,89 +645,60 @@ export const make = Effect.gen(function* () {
     return `path:${normalizeProjectPathForComparison(realPath)}`;
   });
 
-  /**
-   * When it points into a `worktrees/` directory the checkout is a linked worktree, which
-   * onboarding skips because its history imports with the main checkout. Submodules use the same
-   * pointer shape but live under `modules/`, and are offered like any other repository.
-   */
-  const readGitIdentity = Effect.fn("AgentSessionScanner.readGitIdentity")(function* (
+  // Submodule pointers are repositories; linked-worktree pointers live under `worktrees/`.
+  const readGitDirectory = Effect.fn("AgentSessionScanner.readGitDirectory")(function* (
     directory: string,
-  ): Effect.fn.Return<
-    | {
-        readonly _tag: "Repository";
-        readonly gitDir: string;
-        readonly git: AgentSessionProjectGit | null;
-      }
-    | { readonly _tag: "Worktree"; readonly gitDir: string }
-    | { readonly _tag: "NotGit" }
-  > {
+  ) {
     const gitPath = path.join(directory, ".git");
     const gitStats = yield* statOption(gitPath);
     if (Option.isNone(gitStats)) return { _tag: "NotGit" } as const;
-    let gitDir = gitPath;
-    if (gitStats.value.type !== "Directory") {
-      const pointer = yield* fileSystem
-        .readFileString(gitPath)
-        .pipe(Effect.orElseSucceed(() => ""));
-      const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-      if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
-      gitDir = path.resolve(directory, target);
-      if (/[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)) {
-        return { _tag: "Worktree", gitDir } as const;
-      }
+    if (gitStats.value.type === "Directory") {
+      return { _tag: "Repository", gitDir: gitPath } as const;
     }
-    const configText = yield* fileSystem
-      .readFileString(path.join(gitDir, "config"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    const originUrl = parseOriginUrlFromGitConfig(configText);
-    return {
-      _tag: "Repository",
-      gitDir,
-      git: {
-        remoteKey: originUrl === null ? null : normalizeGitRemoteUrl(originUrl),
-        repository: parseGitHubRepositoryNameWithOwnerFromRemoteUrl(originUrl),
-      },
-    } as const;
+    const pointer = yield* fileSystem.readFileString(gitPath).pipe(Effect.orElseSucceed(() => ""));
+    const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
+    if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
+    const gitDir = path.resolve(directory, target);
+    return /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)
+      ? ({ _tag: "Worktree", gitDir } as const)
+      : ({ _tag: "Repository", gitDir } as const);
   });
 
-  /** T3-managed worktrees stay excluded: their threads already exist. */
   const matchProjectCheckout = Effect.fn("AgentSessionScanner.matchProjectCheckout")(function* (
     directory: string,
-    project: { readonly identity: string; readonly gitDirIdentity: string | null },
-  ): Effect.fn.Return<
-    | { readonly _tag: "Root" }
-    | { readonly _tag: "Worktree"; readonly worktree: AgentSessionWorktree }
-    | { readonly _tag: "Unrelated" }
-  > {
+    project: {
+      readonly identity: string;
+      readonly gitDirIdentity: string | null;
+      readonly managedDirectories: ReadonlyArray<string>;
+    },
+  ) {
     const resolved = path.resolve(directory);
+    if (isExcludedProjectPath(resolved, project.managedDirectories)) {
+      return { _tag: "Unrelated" } as const;
+    }
     if ((yield* directoryIdentity(resolved)) === project.identity) return { _tag: "Root" } as const;
-    if (project.gitDirIdentity === null) return { _tag: "Unrelated" } as const;
-    const gitIdentity = yield* readGitIdentity(resolved);
-    if (gitIdentity._tag !== "Worktree") return { _tag: "Unrelated" } as const;
+    if (project.gitDirIdentity === null) {
+      return { _tag: "Unrelated" } as const;
+    }
+    const gitDirectory = yield* readGitDirectory(resolved);
+    if (gitDirectory._tag !== "Worktree") return { _tag: "Unrelated" } as const;
     const realPath = yield* fileSystem
       .realPath(resolved)
       .pipe(Effect.orElseSucceed(() => resolved));
-    if (isExcludedProjectPath(resolved) || isExcludedProjectPath(realPath)) {
+    if (isExcludedProjectPath(realPath, project.managedDirectories)) {
       return { _tag: "Unrelated" } as const;
     }
-    const readGitFile = (name: string) =>
-      fileSystem.readFileString(path.join(gitIdentity.gitDir, name)).pipe(
-        Effect.map((text) => text.trim()),
-        Effect.orElseSucceed(() => ""),
-      );
-    const commonDir = yield* readGitFile("commondir");
+    const commonDir = yield* fileSystem
+      .readFileString(path.join(gitDirectory.gitDir, "commondir"))
+      .pipe(Effect.orElseSucceed(() => ""));
     if (
-      commonDir === "" ||
-      (yield* directoryIdentity(path.resolve(gitIdentity.gitDir, commonDir))) !==
+      commonDir.trim() === "" ||
+      (yield* directoryIdentity(path.resolve(gitDirectory.gitDir, commonDir.trim()))) !==
         project.gitDirIdentity
     ) {
       return { _tag: "Unrelated" } as const;
     }
-    const head = yield* readGitFile("HEAD");
-    return {
-      _tag: "Worktree",
-      worktree: { path: resolved, branch: /^ref: refs\/heads\/(.+)$/.exec(head)?.[1] ?? null },
-    } as const;
+    return { _tag: "Worktree", path: resolved, gitDir: gitDirectory.gitDir } as const;
   });
 
   const readCwd = Effect.fn("AgentSessionScanner.readCwd")(function* (
@@ -1066,11 +1041,9 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
-    const settings = yield* serverSettings.getSettings.pipe(
-      Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
-    );
-
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
+    settings: ContractServerSettings,
+  ) {
     const raw: Array<RawCandidate> = [];
     let truncated = false;
 
@@ -1177,7 +1150,7 @@ export const make = Effect.gen(function* () {
   let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
 
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    const { candidates: raw, truncated } = yield* collectCandidates();
+    const { candidates: raw, truncated } = yield* collectCandidates(yield* readSettings);
     cachedCandidates = raw;
 
     const merged = new Map<
@@ -1213,12 +1186,23 @@ export const make = Effect.gen(function* () {
         if (isExcludedProjectPath(realPath)) {
           key = "";
         } else {
-          const gitIdentity = yield* readGitIdentity(resolved);
+          const gitIdentity = yield* readGitDirectory(resolved);
           if (gitIdentity._tag === "Worktree") {
             key = "";
           } else {
             key = yield* directoryIdentity(resolved, stats.value);
-            gitIdentities.set(key, gitIdentity._tag === "Repository" ? gitIdentity.git : null);
+            let git: AgentSessionProjectGit | null = null;
+            if (gitIdentity._tag === "Repository") {
+              const configText = yield* fileSystem
+                .readFileString(path.join(gitIdentity.gitDir, "config"))
+                .pipe(Effect.orElseSucceed(() => ""));
+              const originUrl = parseOriginUrlFromGitConfig(configText);
+              git = {
+                remoteKey: originUrl === null ? null : normalizeGitRemoteUrl(originUrl),
+                repository: parseGitHubRepositoryNameWithOwnerFromRemoteUrl(originUrl),
+              };
+            }
+            gitIdentities.set(key, git);
           }
         }
         directoryKeys.set(resolved, key);
@@ -1304,8 +1288,31 @@ export const make = Effect.gen(function* () {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
-    const rootGit = yield* readGitIdentity(root);
+    const settings = yield* readSettings;
+    const managedDirectories = (yield* Effect.forEach(
+      managedWorktreesDirectories(settings, worktreesDir, path, homeDir),
+      (directory) => {
+        const resolved = path.resolve(directory);
+        return fileSystem.realPath(resolved).pipe(
+          Effect.catchTags({
+            PlatformError: (cause) =>
+              Effect.succeed(cause.reason._tag === "NotFound" ? resolved : null),
+          }),
+          Effect.map((real) =>
+            real === null || isFilesystemRoot(real, path) ? [] : [resolved, real],
+          ),
+        );
+      },
+    )).flat();
+    if (
+      isExcludedProjectPath(root, managedDirectories) ||
+      isExcludedProjectPath(realRoot, managedDirectories)
+    ) {
+      return Stream.empty;
+    }
+    const rootGit = yield* readGitDirectory(root);
     const project = {
+      managedDirectories,
       identity: yield* directoryIdentity(root),
       gitDirIdentity:
         rootGit._tag === "Repository" ? yield* directoryIdentity(rootGit.gitDir) : null,
@@ -1313,7 +1320,7 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
-    const candidates = cachedCandidates ?? (yield* collectCandidates()).candidates;
+    const candidates = cachedCandidates ?? (yield* collectCandidates(settings)).candidates;
     cachedCandidates = candidates;
 
     const eligibleTranscripts: Array<{
@@ -1447,11 +1454,23 @@ export const make = Effect.gen(function* () {
             return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
           }
           importedSessions.add(sessionKey);
+          const head =
+            checkout._tag === "Worktree"
+              ? yield* fileSystem
+                  .readFileString(path.join(checkout.gitDir, "HEAD"))
+                  .pipe(Effect.orElseSucceed(() => ""))
+              : "";
           return Option.some<AgentSessionRecentThread>({
             _tag: "Importable",
             thread: parsedThread,
             source,
-            worktree: checkout._tag === "Worktree" ? checkout.worktree : null,
+            worktree:
+              checkout._tag === "Worktree"
+                ? {
+                    path: checkout.path,
+                    branch: /^ref: refs\/heads\/(.+)$/.exec(head.trim())?.[1] ?? null,
+                  }
+                : null,
           });
         }).pipe(importReadLock.withPermits(1)),
       ),

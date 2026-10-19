@@ -47,6 +47,8 @@ interface ScannerTestInput {
   readonly importedWorkspaceRoots?: ReadonlyArray<string>;
   readonly configBaseDir?: string;
   readonly providerInstances?: ContractServerSettings["providerInstances"];
+  readonly worktreesDirectory?: string;
+  readonly previousWorktreesDirectories?: ReadonlyArray<string>;
 }
 
 const layerScannerTest = (input: ScannerTestInput) =>
@@ -54,6 +56,8 @@ const layerScannerTest = (input: ScannerTestInput) =>
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest({
+          worktreesDirectory: input.worktreesDirectory ?? "",
+          previousWorktreesDirectories: input.previousWorktreesDirectories ?? [],
           providerInstances: {
             [ProviderInstanceId.make("claudeAgent")]: {
               driver: ProviderDriverKind.make("claudeAgent"),
@@ -135,34 +139,6 @@ const addLinkedWorktree = Effect.fn("AgentSessionScanner.test.addLinkedWorktree"
     yield* fileSystem.writeFileString(path.join(input.directory, ".git"), `gitdir: ${gitDir}\n`);
   },
 );
-
-const writeClaudeSession = Effect.fn("AgentSessionScanner.test.writeClaudeSession")(
-  function* (input: {
-    readonly claudeHomePath: string;
-    readonly sessionId: string;
-    readonly cwd: string;
-    readonly mtimeMs: number;
-  }) {
-    const path = yield* Path.Path;
-    yield* writeTranscript({
-      filePath: path.join(input.claudeHomePath, "projects", input.sessionId, "session.jsonl"),
-      contents: `${JSON.stringify({
-        type: "user",
-        cwd: input.cwd,
-        sessionId: input.sessionId,
-        message: { role: "user", content: "Fix the project" },
-      })}\n`,
-      mtimeMs: input.mtimeMs,
-    });
-  },
-);
-
-const importedWorktrees = (outcomes: ReadonlyArray<AgentSessionScanner.AgentSessionRecentThread>) =>
-  outcomes.flatMap((outcome) =>
-    outcome._tag === "Importable"
-      ? [{ sessionId: outcome.thread.providerSessionId, worktree: outcome.worktree }]
-      : [],
-  );
 
 const claudeSessionLine = (cwd: string) =>
   `${JSON.stringify({ type: "user", cwd, sessionId: "s1" })}\n${JSON.stringify({ type: "assistant" })}\n`;
@@ -2438,87 +2414,125 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("imports sessions from linked worktrees of the project with their branch", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
-        yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const configBaseDir = yield* makeTempDir("t3code-scanner-base-");
-        const repo = yield* makeTempDir("t3code-workspace-repo-");
-        const otherRepo = yield* makeTempDir("t3code-workspace-other-");
+    it.effect.each(["directory", "pointer"] as const)(
+      "imports only the project's linked worktrees with their branches when .git is a %s",
+      (layout) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+          yield* TestClock.setTime(nowMs);
+          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+          const configBaseDir = yield* makeTempDir("t3code-scanner-base-");
+          const repo = yield* makeTempDir("t3code-workspace-repo-");
+          const otherRepo = yield* makeTempDir("t3code-workspace-other-");
+          const commonGitDir =
+            layout === "directory"
+              ? path.join(repo, ".git")
+              : yield* makeTempDir("t3code-separate-git-dir-");
+          if (layout === "pointer") {
+            yield* fileSystem.writeFileString(path.join(repo, ".git"), `gitdir: ${commonGitDir}\n`);
+          }
 
-        const worktree = path.join(repo, ".claude", "worktrees", "feature");
-        const managedWorktree = path.join(configBaseDir, "worktrees", "repo", "managed");
-        const otherWorktree = path.join(otherRepo, "elsewhere");
-        const commonGitDir = path.join(repo, ".git");
-        yield* addLinkedWorktree({ commonGitDir, directory: worktree, branch: "feature" });
-        yield* addLinkedWorktree({ commonGitDir, directory: managedWorktree, branch: "managed" });
-        yield* addLinkedWorktree({
-          commonGitDir: path.join(otherRepo, ".git"),
-          directory: otherWorktree,
-          branch: "elsewhere",
-        });
-
-        for (const [index, session] of [
-          { sessionId: "root-session", cwd: repo },
-          { sessionId: "worktree-session", cwd: worktree },
-          { sessionId: "managed-session", cwd: managedWorktree },
-          { sessionId: "other-session", cwd: otherWorktree },
-        ].entries()) {
-          yield* writeClaudeSession({
-            ...session,
-            claudeHomePath,
-            mtimeMs: nowMs - (index + 1) * 60 * 1000,
+          const worktree = path.join(repo, ".claude", "worktrees", "feature");
+          const externalWorktree = yield* makeTempDir("t3code-workspace-feature-");
+          const managedWorktree = path.join(configBaseDir, "worktrees", "repo", "managed");
+          const customDirectory = yield* makeTempDir("t3code-custom-worktrees-");
+          const previousDirectory = yield* makeTempDir("t3code-previous-worktrees-");
+          const customWorktree = path.join(customDirectory, "repo", "custom");
+          const previousWorktree = path.join(previousDirectory, "repo", "previous");
+          const otherWorktree = path.join(repo, "unrelated");
+          yield* addLinkedWorktree({ commonGitDir, directory: worktree, branch: "feature" });
+          yield* addLinkedWorktree({
+            commonGitDir,
+            directory: externalWorktree,
+            branch: "external",
           });
-        }
+          yield* addLinkedWorktree({ commonGitDir, directory: managedWorktree, branch: "managed" });
+          yield* addLinkedWorktree({ commonGitDir, directory: customWorktree, branch: "custom" });
+          yield* addLinkedWorktree({
+            commonGitDir,
+            directory: previousWorktree,
+            branch: "previous",
+          });
+          yield* addLinkedWorktree({
+            commonGitDir: path.join(otherRepo, ".git"),
+            directory: otherWorktree,
+            branch: "elsewhere",
+          });
 
-        const outcomes = yield* runRecentThreadOutcomes({
-          claudeHomePath,
-          codexHomePath,
-          configBaseDir,
-          workspaceRoot: repo,
-        });
+          let worktreesDirectory = customDirectory;
+          const previousWorktreesDirectories = [previousDirectory, path.parse(repo).root];
+          const sessions = [
+            { sessionId: "root-session", cwd: repo },
+            { sessionId: "worktree-session", cwd: worktree },
+            { sessionId: "external-session", cwd: externalWorktree },
+            { sessionId: "managed-session", cwd: managedWorktree },
+            { sessionId: "custom-session", cwd: customWorktree },
+            { sessionId: "previous-session", cwd: previousWorktree },
+            { sessionId: "other-session", cwd: otherWorktree },
+          ];
+          if (symlinksSupported) {
+            const aliases = yield* makeTempDir("t3code-managed-aliases-");
+            for (const [name, directory, branch] of [
+              ["default", path.join(configBaseDir, "worktrees"), "managed"],
+              ["custom", customDirectory, "custom"],
+              ["previous", previousDirectory, "previous"],
+            ] as const) {
+              const alias = path.join(aliases, name);
+              yield* fileSystem.symlink(directory, alias);
+              sessions.push({
+                sessionId: `${name}-alias-session`,
+                cwd: path.join(alias, "repo", branch),
+              });
+              if (name === "custom") worktreesDirectory = alias;
+              if (name === "previous") previousWorktreesDirectories[0] = alias;
+            }
+            const rootAlias = path.join(aliases, "root");
+            yield* fileSystem.symlink(path.parse(repo).root, rootAlias);
+            previousWorktreesDirectories.push(rootAlias);
+            const escapedAlias = path.join(customDirectory, "external");
+            yield* fileSystem.symlink(externalWorktree, escapedAlias);
+            sessions.push({ sessionId: "managed-escape-session", cwd: escapedAlias });
+          }
 
-        expect(importedWorktrees(outcomes)).toEqual([
-          { sessionId: "root-session", worktree: null },
-          { sessionId: "worktree-session", worktree: { path: worktree, branch: "feature" } },
-        ]);
-      }),
-    );
+          for (const [index, session] of sessions.entries()) {
+            yield* writeTranscript({
+              filePath: path.join(claudeHomePath, "projects", session.sessionId, "session.jsonl"),
+              contents: `${JSON.stringify({
+                type: "user",
+                ...session,
+                message: { role: "user", content: "Fix the project" },
+              })}\n`,
+              mtimeMs: nowMs - (index + 1) * 60 * 1000,
+            });
+          }
 
-    it.effect("imports linked worktree sessions when the project's .git is a pointer", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
-        yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const repo = yield* makeTempDir("t3code-workspace-repo-");
-        const commonGitDir = yield* makeTempDir("t3code-separate-git-dir-");
-        yield* fileSystem.writeFileString(path.join(repo, ".git"), `gitdir: ${commonGitDir}\n`);
+          const outcomes = yield* runRecentThreadOutcomes({
+            claudeHomePath,
+            codexHomePath,
+            configBaseDir,
+            workspaceRoot: repo,
+            worktreesDirectory,
+            previousWorktreesDirectories,
+          });
 
-        const worktree = path.join(repo, ".claude", "worktrees", "feature");
-        yield* addLinkedWorktree({ commonGitDir, directory: worktree, branch: "feature" });
-        yield* writeClaudeSession({
-          claudeHomePath,
-          sessionId: "worktree-session",
-          cwd: worktree,
-          mtimeMs: nowMs,
-        });
-
-        const outcomes = yield* runRecentThreadOutcomes({
-          claudeHomePath,
-          codexHomePath,
-          workspaceRoot: repo,
-        });
-
-        expect(importedWorktrees(outcomes)).toEqual([
-          { sessionId: "worktree-session", worktree: { path: worktree, branch: "feature" } },
-        ]);
-      }),
+          expect(
+            outcomes.flatMap((outcome) =>
+              outcome._tag === "Importable"
+                ? [{ sessionId: outcome.thread.providerSessionId, worktree: outcome.worktree }]
+                : [],
+            ),
+          ).toEqual([
+            { sessionId: "root-session", worktree: null },
+            { sessionId: "worktree-session", worktree: { path: worktree, branch: "feature" } },
+            {
+              sessionId: "external-session",
+              worktree: { path: externalWorktree, branch: "external" },
+            },
+          ]);
+        }),
     );
 
     it.effect("uses one deterministic provider instance for a shared session home", () =>
