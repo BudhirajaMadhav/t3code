@@ -20,8 +20,11 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import * as Schema from "effect/Schema";
 import {
   DndContext,
+  pointerWithin,
+  useDraggable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -62,6 +65,7 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentMachineKind,
   type ScopedThreadRef,
+  type SidebarSectionId,
   type ThreadId,
 } from "@t3tools/contracts";
 
@@ -266,6 +270,21 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import {
+  CustomSectionBlock,
+  CustomSectionsEnd,
+  SectionNameDialogHost,
+  showCustomSectionMenu,
+  useCollapsedCustomSections,
+  useCustomSectionActions,
+  useSidebarSectionsIndex,
+} from "./SidebarCustomSections";
+import {
+  buildMoveToSectionMenuItem,
+  customSectionKeyFromDroppableId,
+  resolveCustomSectionDrop,
+  splitSidebarListsBySection,
+} from "./SidebarCustomSections.logic";
 import { Button, InlineButton } from "./ui/button";
 import {
   Combobox,
@@ -504,7 +523,7 @@ function useSidebarThreads(input: {
   const settledVisibleCount =
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
-  const partition = partitionSidebarThreads({
+  const fullPartition = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
     serverConfigs,
@@ -512,8 +531,35 @@ function useSidebarThreads(input: {
     workingShelfEnabled,
     clockKey: `${nowMinute}:${snoozeWakeTick}`,
   });
-  const partitionNextWakeAt = partition.snoozedThreads[0]?.snoozedUntil ?? null;
+  const partitionNextWakeAt = fullPartition.snoozedThreads[0]?.snoozedUntil ?? null;
   if (partitionNextWakeAt !== nextSnoozeWakeAt) setNextSnoozeWakeAt(partitionNextWakeAt);
+  // Sectioned threads leave the flat lists, so everything below sees only the
+  // flat list; the sections render above Pinned from `customSections`.
+  const sectionsIndex = useSidebarSectionsIndex(serverConfigs);
+  const { collapsed: collapsedCustomSections, toggle: toggleCustomSection } =
+    useCollapsedCustomSections();
+  const { flat: partition, bySection } = splitSidebarListsBySection(
+    fullPartition,
+    (thread) => sectionsIndex.sectionKeyByThreadKey.get(threadShellKey(thread)),
+    sectionsIndex.sectionByKey,
+  );
+  const customSections = sectionsIndex.sections.flatMap((view) => {
+    const lists = bySection.get(view.key);
+    // Under a project filter, a section without matching threads is noise.
+    return lists === undefined && scopedProjectKeys !== null ? [] : [{ view, lists }];
+  });
+  const sectionLiveThreads = customSections.flatMap(({ view, lists }) =>
+    lists === undefined || collapsedCustomSections.has(view.key)
+      ? []
+      : [...lists.pinnedThreads, ...lists.activeThreads, ...lists.workingThreads],
+  );
+  const sectionedThreads = [...bySection.values()].flatMap((lists) => [
+    ...lists.pinnedThreads,
+    ...lists.activeThreads,
+    ...lists.workingThreads,
+    ...lists.snoozedThreads,
+    ...lists.settledThreads,
+  ]);
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
@@ -538,6 +584,7 @@ function useSidebarThreads(input: {
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   const orderedThreads = [
+    ...sectionLiveThreads,
     ...pinnedThreads,
     ...activeThreads,
     ...visibleWorkingThreads,
@@ -560,6 +607,7 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     searchableThreads: [
+      ...sectionedThreads,
       ...pinnedThreads,
       ...activeThreads,
       ...workingThreads,
@@ -583,9 +631,18 @@ function useSidebarThreads(input: {
     visibleSnoozedThreads,
     visibleWorkingThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
-    threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
-    settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
-    snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
+    threadByKey: new Map(
+      [...orderedThreads, ...sectionedThreads].map(
+        (thread) => [threadShellKey(thread), thread] as const,
+      ),
+    ),
+    sectionsIndex,
+    customSections,
+    collapsedCustomSections,
+    toggleCustomSection,
+    // The thread menu reads these for sectioned threads too.
+    settledThreadKeys: new Set(fullPartition.settledThreads.map(threadShellKey)),
+    snoozedThreadKeys: new Set(fullPartition.snoozedThreads.map(threadShellKey)),
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
     activeKeys: activeThreads.map(threadShellKey),
@@ -1173,6 +1230,34 @@ function SortableThreadRow(
     isDragging: isDragging && !contextDrag,
   };
   // Keyed by variant so a card/slim switch remounts the row.
+  return <SidebarThreadRow key={rowProps.variant} {...rowProps} sortable={bag} />;
+}
+
+// Sectioned rows sit outside the sortable list, so they drag without shifting
+// the flat list's rows; the drop decides the section.
+function DraggableThreadRow(
+  props: Omit<SidebarThreadRowProps, "sortable"> & {
+    sortableId: string;
+    sortableDisabled: boolean;
+    contextDrag: boolean;
+  },
+) {
+  const { sortableId, sortableDisabled, contextDrag, ...rowProps } = props;
+  const canOperateThread = useEnvironmentScope(
+    rowProps.thread.environmentId,
+    AuthOrchestrationOperateScope,
+  );
+  const { listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: sortableId,
+    disabled: sortableDisabled || !canOperateThread,
+  });
+  const bag = {
+    listeners,
+    setNodeRef,
+    transform: contextDrag ? null : transform,
+    transition: undefined,
+    isDragging: isDragging && !contextDrag,
+  };
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} sortable={bag} />;
 }
 
@@ -2803,6 +2888,7 @@ export default function Sidebar() {
   });
   const newThreadContext = useHandleNewThread();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const customSectionActions = useCustomSectionActions();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -3020,6 +3106,10 @@ export default function Sidebar() {
     pinnedKeysById,
     activeKeysById,
     routeRowThreadKey,
+    sectionsIndex,
+    customSections,
+    collapsedCustomSections,
+    toggleCustomSection,
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
@@ -3523,19 +3613,24 @@ export default function Sidebar() {
   const handleThreadDragStart = (event: DragStartEvent) => {
     const activeKey = String(event.active.id);
     contextDragKeyRef.current = activeKey;
-    const activeSection = sectionByThreadKey.get(activeKey);
-    if (activeSection === undefined) return;
-    listMotionRef.current?.suspend();
     const list = threadListRef.current;
+    // Sections sit above Pinned, so rows may travel up to the first section.
+    const firstCustomSection = list?.querySelector<HTMLElement>(
+      '[data-testid="sidebar-custom-section"]',
+    );
     const header = list?.querySelector<HTMLElement>('[data-testid="sidebar-pinned-header"]');
-    if (list && header) {
+    if (list && (firstCustomSection || header)) {
       const listRect = list.getBoundingClientRect();
       const scale = list.offsetWidth > 0 ? listRect.width / list.offsetWidth : 1;
-      dragLabelOffsetRef.current =
-        header.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
+      dragLabelOffsetRef.current = firstCustomSection
+        ? firstCustomSection.getBoundingClientRect().top - listRect.top
+        : header!.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
     } else {
       dragLabelOffsetRef.current = 0;
     }
+    const activeSection = sectionByThreadKey.get(activeKey);
+    if (activeSection === undefined) return;
+    listMotionRef.current?.suspend();
     setDragState({
       activeKey,
       activeSection,
@@ -3699,8 +3794,51 @@ export default function Sidebar() {
       },
     );
   })();
+  // A pointer inside a section of the dragged thread's environment targets that
+  // section; everything else keeps the flat list's own collision rules.
+  const sectionAwareCollisionDetection: CollisionDetection = (args) => {
+    const draggedEnvironmentId = parseScopedThreadKey(String(args.active.id))?.environmentId;
+    const sectionKeyOf = (id: string | number) => customSectionKeyFromDroppableId(String(id));
+    const sectionHits = pointerWithin({
+      ...args,
+      droppableContainers: args.droppableContainers.filter((container) => {
+        const key = sectionKeyOf(container.id);
+        return (
+          key !== null &&
+          sectionsIndex.sectionByKey.get(key)?.environmentId === draggedEnvironmentId
+        );
+      }),
+    });
+    if (sectionHits.length > 0) return sectionHits;
+    return dndCollisionDetection({
+      ...args,
+      droppableContainers: args.droppableContainers.filter(
+        (container) => sectionKeyOf(container.id) === null,
+      ),
+    });
+  };
   const handleThreadDragEnd = (event: DragEndEvent) => {
     const activeKey = String(event.active.id);
+    const draggedThread = threadByKey.get(activeKey);
+    const sectionDrop =
+      draggedThread === undefined
+        ? null
+        : resolveCustomSectionDrop({
+            thread: draggedThread,
+            fromSectionKey: sectionsIndex.sectionKeyByThreadKey.get(activeKey),
+            overId: event.over === null ? null : String(event.over.id),
+            sectionByKey: sectionsIndex.sectionByKey,
+          });
+    if (sectionDrop !== null) {
+      if (sectionDrop.kind === "assign") {
+        void customSectionActions.assign(
+          sectionDrop.environmentId,
+          [sectionDrop.threadId],
+          sectionDrop.sectionId,
+        );
+      }
+      return;
+    }
     const activeSection = sectionByThreadKey.get(activeKey);
     const target =
       event.over === null
@@ -3893,6 +4031,46 @@ export default function Sidebar() {
     })();
   };
 
+  const moveToSectionMenuItem = (threads: ReadonlyArray<EnvironmentThreadShell>) => {
+    const environmentId = threads[0]?.environmentId;
+    if (
+      environmentId === undefined ||
+      threads.some((thread) => thread.environmentId !== environmentId) ||
+      serverConfigs.get(environmentId)?.environment.capabilities.sidebarSections !== true
+    ) {
+      return null;
+    }
+    const current = new Set(
+      threads.map((thread) => sectionsIndex.sectionKeyByThreadKey.get(threadShellKey(thread))),
+    );
+    const [only] = current;
+    return buildMoveToSectionMenuItem({
+      sections: sectionsIndex.sections
+        .filter((view) => view.environmentId === environmentId)
+        .map((view) => view.section),
+      currentSectionId:
+        current.size === 1 && only !== undefined
+          ? (sectionsIndex.sectionByKey.get(only)?.section.id ?? null)
+          : null,
+      anyInSection: [...current].some((key) => key !== undefined),
+    });
+  };
+  const applySectionMenuChoice = async (
+    choice: string,
+    threads: ReadonlyArray<EnvironmentThreadShell>,
+  ) => {
+    const environmentId = threads[0]?.environmentId;
+    if (environmentId === undefined) return;
+    const target = choice.slice("section:".length);
+    const threadIds = threads.map((thread) => thread.id);
+    if (target === "new") await customSectionActions.create(environmentId, threadIds);
+    else
+      await customSectionActions.assign(
+        environmentId,
+        threadIds,
+        target === "none" ? null : (target as SidebarSectionId),
+      );
+  };
   const handleMultiSelectContextMenu = useStableCallback(
     async (position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -3937,6 +4115,7 @@ export default function Sidebar() {
         pinnedCount: pinnedSelectedThreads.length,
       });
       const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+      const sectionMenuItem = moveToSectionMenuItem(selectedThreads);
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
@@ -3967,6 +4146,15 @@ export default function Sidebar() {
                         disabled: !canOperateThreads(selectedThreads),
                       },
                     ],
+                  },
+                ]
+              : []),
+            ...(sectionMenuItem
+              ? [
+                  {
+                    ...sectionMenuItem,
+                    label: `Move to section (${count})`,
+                    disabled: !canOperateThreads(selectedThreads),
                   },
                 ]
               : []),
@@ -4007,6 +4195,11 @@ export default function Sidebar() {
               : selectedThreads;
       if (clicked.value === "settle" && actionTargets.length === 0) return;
       if (clicked.value !== "mark-unread" && !checkThreadOperations(actionTargets)) return;
+      if (clicked.value?.startsWith("section:")) {
+        clearSelection();
+        await applySectionMenuChoice(clicked.value, selectedThreads);
+        return;
+      }
       if (clicked.value?.startsWith("snooze:")) {
         const preset =
           clicked.value === "snooze:custom"
@@ -4267,12 +4460,17 @@ export default function Sidebar() {
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
+              sectionMenu: moveToSectionMenuItem([thread]),
             }),
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
+        if (clicked.value.startsWith("section:")) {
+          await applySectionMenuChoice(clicked.value, [thread]);
+          return;
+        }
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -4786,7 +4984,7 @@ export default function Sidebar() {
               <DndContext
                 sensors={dndSensors}
                 autoScroll={!isContextDrag}
-                collisionDetection={dndCollisionDetection}
+                collisionDetection={sectionAwareCollisionDetection}
                 modifiers={dndModifiers}
                 onDragStart={handleThreadDragStart}
                 onDragOver={handleThreadDragOver}
@@ -4811,6 +5009,7 @@ export default function Sidebar() {
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
+                        inCustomSection = false,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -4818,14 +5017,15 @@ export default function Sidebar() {
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
                         const rowVariant = isCard ? "card" : "slim";
+                        const ThreadRow = inCustomSection ? DraggableThreadRow : SortableThreadRow;
                         return (
-                          <SortableThreadRow
+                          <ThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
                               renamingThreadKey === threadKey ||
-                              !draggableThreadKeys.has(threadKey) ||
+                              (!inCustomSection && !draggableThreadKeys.has(threadKey)) ||
                               optimisticDrop !== null
                             }
                             thread={thread}
@@ -4928,6 +5128,37 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
+                        // Above Pinned: the sortable projection assumes its rows
+                        // are contiguous, so nothing sits between its sections.
+                        ...customSections.map(({ view, lists }) => (
+                          <CustomSectionBlock
+                            key={view.key}
+                            view={view}
+                            lists={lists}
+                            collapsed={collapsedCustomSections.has(view.key)}
+                            onToggle={() => toggleCustomSection(view.key)}
+                            environmentLabel={
+                              view.environmentId === primaryEnvironmentId
+                                ? null
+                                : (environmentLabelById.get(view.environmentId) ?? null)
+                            }
+                            routeThreadKey={routeRowThreadKey}
+                            onHeaderContextMenu={(position) =>
+                              showCustomSectionMenu({
+                                view,
+                                siblings: sectionsIndex.sections.filter(
+                                  (sibling) => sibling.environmentId === view.environmentId,
+                                ),
+                                position,
+                                actions: customSectionActions,
+                              })
+                            }
+                            renderRow={(thread, section) => renderThreadRow(thread, section, true)}
+                          />
+                        )),
+                        ...(customSections.length > 0 && sidebarListItems.length > 0
+                          ? [<CustomSectionsEnd key="custom-sections-end" />]
+                          : []),
                       ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
@@ -5074,6 +5305,7 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
+          customSections.every(({ lists }) => lists === undefined) &&
           pinnedThreads.length +
             activeThreads.length +
             workingThreads.length +
@@ -5103,6 +5335,7 @@ export default function Sidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarChromeFooter />
+      <SectionNameDialogHost />
     </>
   );
 }
