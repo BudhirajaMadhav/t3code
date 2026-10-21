@@ -186,6 +186,21 @@ describe("shouldOfferResumeCompaction", () => {
     expect(offer("2026-08-24T11:56:00.000Z")).toBe(false);
   });
 
+  it("uses the reported cache expiry, which starts at the request", () => {
+    const offer = (promptCacheExpiresAt: string) =>
+      shouldOfferResumeCompaction({
+        provider: "claudeAgent",
+        usedTokens: 200_000,
+        // The report lands after a long response; the expiry still counts from the request.
+        updatedAt: "2026-08-24T11:58:00.000Z",
+        promptCacheTtlMs: 5 * 60_000,
+        promptCacheExpiresAt,
+        now,
+      });
+    expect(offer("2026-08-24T12:00:00.000Z")).toBe(true);
+    expect(offer("2026-08-24T12:00:00.001Z")).toBe(false);
+  });
+
   it("does not show Claude's resume prompt for another provider", () => {
     expect(
       shouldOfferResumeCompaction({

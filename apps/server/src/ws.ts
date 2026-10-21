@@ -72,6 +72,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectMutationError,
+  ProviderReadContextBreakdownError,
   ProviderUploadFeedbackError,
   ProviderSetupError,
   RelayClientInstallFailedError,
@@ -2303,6 +2304,31 @@ export const layerWsRpc = (
                         threadId: input.threadId,
                         cause,
                       }),
+                ),
+              ),
+          ),
+        [WS_METHODS.providerReadContextBreakdown]:
+          /* Request instrumentation already owns the span; keep this helper in that context. */
+          Effect.fnUntraced(
+            function* (input) {
+              const projection = yield* threadManagement.getThreadRecords(input.threadId, [
+                "providerThreads",
+              ]);
+              const providerThread = projection.providerThreads.find(
+                (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+              );
+              const providerSessionId = providerThread?.providerSessionId ?? null;
+              if (providerThread === undefined || providerSessionId === null) return null;
+              // An unloaded session is not restarted just to measure it.
+              const runtime = Option.getOrNull(yield* providerSessionsV2.get(providerSessionId));
+              if (runtime?.readContextBreakdown === undefined) return null;
+              return yield* runtime.readContextBreakdown({ providerThread });
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderReadContextBreakdownError({ threadId: input.threadId, cause }),
                 ),
               ),
           ),

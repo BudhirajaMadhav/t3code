@@ -61,11 +61,30 @@ export function hasDismissedResumeCompaction(
   });
 }
 
+/**
+ * When the prompt cache of the latest model request expires, or null when the
+ * provider did not report its lifetime. The adapter dates the expiry from the
+ * request start; `updatedAt` (the usage report) is the fallback base.
+ */
+export function promptCacheExpiresAtMs(input: {
+  readonly updatedAt: string | null | undefined;
+  readonly promptCacheTtlMs?: number | undefined;
+  readonly promptCacheExpiresAt?: string | undefined;
+}): number | null {
+  const reported = Date.parse(input.promptCacheExpiresAt ?? "");
+  if (Number.isFinite(reported)) return reported;
+  const updatedAt = Date.parse(input.updatedAt ?? "");
+  return input.promptCacheTtlMs !== undefined && Number.isFinite(updatedAt)
+    ? updatedAt + input.promptCacheTtlMs
+    : null;
+}
+
 export function shouldOfferResumeCompaction(input: {
   readonly provider: string | null | undefined;
   readonly usedTokens: number | null | undefined;
   readonly updatedAt: string | null | undefined;
   readonly promptCacheTtlMs?: number | undefined;
+  readonly promptCacheExpiresAt?: string | undefined;
   readonly now: string;
 }): boolean {
   if (
@@ -80,7 +99,7 @@ export function shouldOfferResumeCompaction(input: {
   return (
     Number.isFinite(updatedAt) &&
     Number.isFinite(now) &&
-    now - updatedAt >= (input.promptCacheTtlMs ?? CLAUDE_RESUME_COMPACTION_FALLBACK_MS)
+    now >= (promptCacheExpiresAtMs(input) ?? updatedAt + CLAUDE_RESUME_COMPACTION_FALLBACK_MS)
   );
 }
 

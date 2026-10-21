@@ -622,6 +622,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
       ? ["Context window indicator"]
       : []),
+    ...(settings.composerContextPopoverEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.composerContextPopoverEnabled
+      ? ["Context popover"]
+      : []),
     ...(settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode
       ? ["Response streaming"]
       : []),
@@ -736,6 +740,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
+      composerContextPopoverEnabled: DEFAULT_UNIFIED_SETTINGS.composerContextPopoverEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
@@ -2738,6 +2743,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ composerCollapseOnScroll: Boolean(checked) })
               }
               aria-label="Collapse composer on scroll"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("composer-context-popover")}
+          description="Shows context usage, its breakdown, usage limits, and the prompt cache countdown in the composer. Replaces the legacy context window indicator."
+          resetAction={
+            settings.composerContextPopoverEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.composerContextPopoverEnabled ? (
+              <SettingResetButton
+                label="context popover"
+                onClick={() =>
+                  updateSettings({
+                    composerContextPopoverEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.composerContextPopoverEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.composerContextPopoverEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ composerContextPopoverEnabled: Boolean(checked) })
+              }
+              aria-label="Context popover"
             />
           }
         />

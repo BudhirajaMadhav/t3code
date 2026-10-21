@@ -472,8 +472,10 @@ import { resolveThreadSyncPhase } from "../threadSync";
 import {
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
+  promptCacheExpiresAtMs,
   shouldOfferResumeCompaction,
 } from "./chat/ContextWindowMeter.logic";
+import type { ComposerContextData } from "./chat/ComposerContextControl";
 import {
   deriveLatestContextWindowSnapshot,
   latestProviderTurnTokenUsage,
@@ -5570,10 +5572,30 @@ export default function ChatView(props: ChatViewProps) {
       usedTokens: activeContextWindow.usedTokens,
       updatedAt: activeContextWindow.updatedAt,
       promptCacheTtlMs: activeThreadLiveTokenUsage?.promptCacheTtlMs,
+      promptCacheExpiresAt: activeThreadLiveTokenUsage?.promptCacheExpiresAt,
       now: `${nowMinute}:00.000Z`,
     })
       ? activeContextWindow.usedTokens
       : null;
+  const composerContextData: ComposerContextData = {
+    environmentId,
+    threadId: isServerThread ? threadId : null,
+    driver: selectedProvider,
+    providerInstanceId: activeProviderInstanceId,
+    usageLimitSources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
+    promptCache:
+      selectedProvider === "claudeAgent"
+        ? {
+            expiresAtMs: promptCacheExpiresAtMs({
+              updatedAt: activeThreadLiveTokenUsage?.updatedAt,
+              promptCacheTtlMs: activeThreadLiveTokenUsage?.promptCacheTtlMs,
+              promptCacheExpiresAt: activeThreadLiveTokenUsage?.promptCacheExpiresAt,
+            }),
+            ttlMs: activeThreadLiveTokenUsage?.promptCacheTtlMs,
+          }
+        : null,
+    isWorking,
+  };
   const [fullHistoryThreadKeys, setFullHistoryThreadKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -8492,6 +8514,7 @@ export default function ChatView(props: ChatViewProps) {
                               queuedRunsControl={queuedRunsControl}
                               bannerItems={composerBannerItems}
                               resumeCompactionTokens={resumeCompactionTokens}
+                              contextData={composerContextData}
                               keepFullHistory={keepFullHistory}
                               onToggleKeepFullHistory={toggleKeepFullHistoryStable}
                               onUsageLimitsCommand={
