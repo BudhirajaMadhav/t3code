@@ -180,6 +180,14 @@ be removed).
 - B and D both live in the composer: build them together (one branch) so they share one control and
   one data source.
 
+## E. Back and forward buttons in the top bar
+
+The owner wants Conductor's ← → buttons. T3 already has the behaviour as shortcuts
+(`navigation.back`, `mod+[`; `navigation.forward`, `mod+]`; `docs/user/keybindings.md`). Add two
+top-bar buttons that trigger those actions, next to C's resource chip, disabled when there is nothing to
+go back or forward to, with the shortcut in the tooltip. Built on C's branch, since both live in the
+top bar. No new navigation logic.
+
 ## Non-goals
 
 - Mobile app support for any of the three (later, if the owner asks, as a custom Android build).
