@@ -50,6 +50,8 @@ import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { SectionToolkit } from "./toolkits/sections/tools.ts";
 import * as SectionHandlers from "./toolkits/sections/handlers.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
+import { ThreadWatchToolkit } from "./toolkits/threadWatch/tools.ts";
+import * as ThreadWatchHandlers from "./toolkits/threadWatch/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -1017,6 +1019,10 @@ export const layerOrchestratorToolkit = toolkitRegistration(
 
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
+export const layerThreadWatchToolkit = toolkitRegistration(
+  ThreadWatchToolkit,
+  ThreadWatchHandlers.layer,
+);
 export const layerSectionToolkit = toolkitRegistration(SectionToolkit, SectionHandlers.layer);
 
 const layerWorktreeToolkitRegistration = toolkitRegistration(
@@ -1073,6 +1079,7 @@ export const layer = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
+  layerThreadWatchToolkit,
   layerSectionToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
