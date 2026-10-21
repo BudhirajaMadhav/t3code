@@ -62,7 +62,7 @@ export function ResourcesChip({ environmentId }: { environmentId: EnvironmentId 
           </Button>
         }
       />
-      <PopoverPopup align="end" width="lg" padding="none">
+      <PopoverPopup align="end" width="lg" padding="none" className="w-[28rem]">
         <ResourcesPanel environmentId={environmentId} snapshot={snapshot} />
       </PopoverPopup>
     </Popover>
