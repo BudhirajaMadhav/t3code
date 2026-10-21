@@ -252,6 +252,8 @@ overrides:
   # database provider, which the relay never deploys. Its exact hono/valibot
   # pins are also the bulk of our open dependency advisories.
   "alchemy>@prisma/dev": "-"
+  # The corporate Socket firewall blocks shell-quote 1.10.0 (critical CVE).
+  "shell-quote": ^1.12.0
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"
