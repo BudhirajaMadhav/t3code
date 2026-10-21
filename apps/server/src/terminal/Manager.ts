@@ -35,6 +35,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -75,6 +76,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
+import { ProcessThreadOwners } from "../resourceTelemetry/ProcessThreadOwners.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
 export {
@@ -122,6 +124,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const MAX_TERMINAL_LABEL_LENGTH = 128;
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const isThreadId = Schema.is(ThreadId);
 
 class TerminalSubprocessCheckError extends Schema.TaggedError<TerminalSubprocessCheckError>()(
   "TerminalSubprocessCheckError",
@@ -1519,6 +1522,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
+  const processOwners = yield* ProcessThreadOwners;
   // Terminals must inherit the user's full environment (minus the blocklist
   // applied in createTerminalSpawnEnv) — an allowlist here silently strips
   // things like PSModulePath, DISPLAY, proxies, and toolchain variables.
@@ -2390,6 +2394,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                 }
                 if (eventsActivated) runFork(drainProcessEvents(session, processPid));
               });
+              if (isThreadId(session.threadId)) {
+                // Every exit, stop and teardown path releases the process through
+                // `unsubscribeExit`, so the thread's claim on the PID ends with it.
+                processOwners.register(processPid, session.threadId);
+                const releaseExit = session.unsubscribeExit;
+                session.unsubscribeExit = () => {
+                  releaseExit();
+                  processOwners.unregister(processPid);
+                };
+              }
               eventStamp = advanceEventSequence(session);
               return [undefined, state] as const;
             });

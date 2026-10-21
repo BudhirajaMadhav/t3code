@@ -23,6 +23,7 @@ export interface ResourceTelemetryState {
 
 export function useResourceTelemetry(
   targetEnvironmentId?: EnvironmentId | null,
+  cadence: "live" | "summary" = "live",
 ): ResourceTelemetryState {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId =
@@ -33,7 +34,10 @@ export function useResourceTelemetry(
   const query = useEnvironmentQuery(
     environmentId === null || !canReadDiagnostics
       ? null
-      : serverEnvironment.resourceTelemetry({ environmentId, input: {} }),
+      : serverEnvironment.resourceTelemetry({
+          environmentId,
+          input: cadence === "summary" ? { cadence } : {},
+        }),
   );
   const retryCommand = useAtomCommand(serverEnvironment.retryResourceTelemetry, {
     reportFailure: false,

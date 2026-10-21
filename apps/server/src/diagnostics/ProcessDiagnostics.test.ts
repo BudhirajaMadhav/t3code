@@ -169,6 +169,7 @@ describe("ProcessDiagnostics", () => {
           latest: Effect.succeed(staleTelemetry),
           changes: Stream.empty,
           subscribe: Effect.die("unused"),
+          subscribeSummary: Effect.die("unused"),
           readHistory: () => Effect.die("unused"),
           refresh: Effect.fail(
             new ResourceTelemetry.ResourceTelemetryRefreshFailed({

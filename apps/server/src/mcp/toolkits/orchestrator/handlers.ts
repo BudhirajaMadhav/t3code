@@ -8,6 +8,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { watchAfterHandoff } from "../threadWatch/handlers.ts";
+import { checkSection, placeNewThreads } from "../sections/placement.ts";
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads(() =>
@@ -17,11 +18,18 @@ const handlers = {
       return yield* service.capabilities(scope);
     }),
   ),
-  delegate_task: McpToolAccess.actsAsCaller((input) =>
+  delegate_task: McpToolAccess.actsAsCaller(({ sectionId, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.delegateTask(scope, input);
+      yield* checkSection(sectionId);
+      const result = yield* service.delegateTask(scope, input);
+      yield* placeNewThreads({
+        threadIds: [result.childThreadId],
+        sectionId,
+        parentThreadId: scope.thread?.threadId,
+      });
+      return result;
     }),
   ),
   task_status: McpToolAccess.actsAsCaller(({ taskId }) =>
@@ -95,11 +103,19 @@ const handlers = {
       return yield* service.requestSecret(scope, input);
     }),
   ),
-  create_threads: McpToolAccess.actsAsCaller((input) =>
+  create_threads: McpToolAccess.actsAsCaller(({ sectionId, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.createThreads(scope, input);
+      yield* checkSection(sectionId);
+      const result = yield* service.createThreads(scope, input);
+      // These threads record no parent, so the caller's section is applied here.
+      yield* placeNewThreads({
+        threadIds: result.threads.map((thread) => thread.threadId),
+        sectionId,
+        parentThreadId: scope.thread?.threadId,
+      });
+      return result;
     }),
   ),
   t3_thread_list: McpToolAccess.reads((input) =>

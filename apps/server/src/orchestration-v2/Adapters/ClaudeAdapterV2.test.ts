@@ -2828,6 +2828,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly backgroundTasks?: (
       toolUseId: string,
     ) => Effect.Effect<boolean, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
+    readonly getContextUsage?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"];
     readonly environment?: NodeJS.ProcessEnv;
     readonly subagentLaunchToolUseId?: string;
     readonly nativeSessionId?: string;
@@ -2968,6 +2969,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   }).pipe(Effect.andThen(() => options?.setPermissionMode?.(mode) ?? Effect.void)),
                 backgroundTasks: options?.backgroundTasks ?? (() => Effect.succeed(false)),
                 stopTask: options?.stopTask ?? (() => Effect.void),
+                ...(options?.getContextUsage === undefined
+                  ? {}
+                  : { getContextUsage: options.getContextUsage }),
                 interrupt: options?.interrupt ?? Effect.void,
                 close: options?.close?.(sdkMessages) ?? Effect.void,
               };
@@ -3510,6 +3514,63 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ),
     );
   });
+
+  it.effect("reads the context breakdown only from its own thread's live query", () =>
+    Effect.gen(function* () {
+      const usage = {
+        categories: [
+          { name: "Messages", tokens: 50_000, color: "inactive", kind: "used" },
+          { name: "Free space", tokens: 150_000, color: "inactive", kind: "free" },
+        ],
+        totalTokens: 50_000,
+        maxTokens: 200_000,
+        rawMaxTokens: 200_000,
+        percentage: 25,
+        gridRows: [],
+        model: "claude-sonnet-4-6",
+        memoryFiles: [],
+        mcpTools: [],
+        agents: [],
+        isAutoCompactEnabled: true,
+        apiUsage: null,
+      } satisfies ClaudeSdk.SDKControlGetContextUsageResponse;
+      const harness = yield* makeWakeHarnessWithOptions({ getContextUsage: Effect.succeed(usage) });
+      const read = harness.runtime.readContextBreakdown!;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-context-breakdown"),
+          text: "How full is the context?",
+          attachments: [],
+        }),
+      );
+
+      const breakdown = yield* read({ providerThread: harness.providerThread });
+      assert.deepEqual(
+        breakdown?.categories.map((category) => [category.name, category.tokens]),
+        [
+          ["Free space", 150_000],
+          ["Messages", 50_000],
+        ],
+      );
+      assert.equal(breakdown?.maxTokens, 200_000);
+      const otherThread = {
+        ...harness.providerThread,
+        nativeThreadRef: {
+          driver: harness.providerThread.driver,
+          nativeId: "other-session",
+          strength: "strong" as const,
+        },
+      };
+      assert.isNull(yield* read({ providerThread: otherThread }));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
 
   describe("Plan-mode tool approval", () => {
     const openPlanTurn = Effect.fn("openPlanTurn")(function* (

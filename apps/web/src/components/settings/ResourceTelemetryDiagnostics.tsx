@@ -1,4 +1,5 @@
 import { ProcessSignalActions } from "./ProcessSignalActions";
+import { canSignalProcess, useProcessSignal } from "./useProcessSignal";
 import { AuthEnvironmentMaintainScope } from "@t3tools/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
@@ -29,10 +30,6 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 
 import {
   useResourceTelemetry,
@@ -40,10 +37,7 @@ import {
 } from "../../lib/resourceTelemetryState";
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/formatBytes";
-import { ensureLocalApi } from "../../localApi";
-import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -52,6 +46,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  formatProcessName,
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
@@ -98,13 +93,6 @@ function processIdentityKey(process: ResourceTelemetryProcess): string {
 
 function processSummaryIdentityKey(process: ResourceTelemetryProcessSummary): string {
   return `${process.identity.pid}:${process.identity.startTimeMs}`;
-}
-
-function formatProcessName(process: Pick<ResourceTelemetryProcess, "command" | "name">): string {
-  if (process.name.trim()) return process.name;
-  const firstToken = process.command.trim().split(/\s+/)[0] ?? process.command;
-  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
-  return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
 }
 
 function categoryLabel(category: ResourceTelemetryProcessCategory): string {
@@ -497,14 +485,6 @@ function ProcessTreeName({
   );
 }
 
-function canSignalProcess(process: ResourceTelemetryProcess): boolean {
-  return (
-    process.category === "server-child" ||
-    process.category === "provider-root" ||
-    process.category === "terminal-root"
-  );
-}
-
 function ProcessActions({
   process,
   canMaintainEnvironment,
@@ -822,11 +802,7 @@ export function ResourceTelemetryDiagnostics({
     },
     environmentId,
   );
-  const signalServerProcess = useAtomCommand(serverEnvironment.signalProcess, {
-    reportFailure: false,
-  });
-  const [signalingKeys, setSignalingKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
+  const { signalingKeys, signalProcess } = useProcessSignal(environmentId);
   const environmentIdRef = useRef(environmentId);
   useEffect(() => {
     environmentIdRef.current = environmentId;
@@ -837,88 +813,6 @@ export function ResourceTelemetryDiagnostics({
   const [isRetrying, setIsRetrying] = useState(false);
   const snapshot = telemetry.data;
   const allT3 = snapshot?.groups.allT3;
-
-  const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
-    const targetEnvironmentId = environmentIdRef.current;
-    if (
-      targetEnvironmentId === null ||
-      !readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)
-    )
-      return;
-    const identityKey = processIdentityKey(process);
-    if (signalingKeysRef.current.has(identityKey)) return;
-    const nextSignalingKeys = new Set(signalingKeysRef.current).add(identityKey);
-    signalingKeysRef.current = nextSignalingKeys;
-    setSignalingKeys(nextSignalingKeys);
-    const clearSignaling = () => {
-      const next = new Set(signalingKeysRef.current);
-      next.delete(identityKey);
-      signalingKeysRef.current = next;
-      setSignalingKeys(next);
-    };
-
-    if (signal === "SIGKILL") {
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          `Send SIGKILL to process ${process.identity.pid}? This cannot be handled by the process.`,
-          { variant: "destructive" },
-        );
-      } catch (error) {
-        clearSignaling();
-        toastManager.add({
-          type: "error",
-          title: "Could not confirm signal",
-          description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
-        });
-        return;
-      }
-      if (!confirmed) {
-        clearSignaling();
-        return;
-      }
-    }
-    if (
-      environmentIdRef.current !== targetEnvironmentId ||
-      !readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)
-    ) {
-      clearSignaling();
-      return;
-    }
-    void signalServerProcess({
-      environmentId: targetEnvironmentId,
-      input: {
-        pid: process.identity.pid,
-        startTimeMs: process.identity.startTimeMs,
-        signal,
-      },
-    })
-      .then((result) => {
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) return;
-          throw squashAtomCommandFailure(result);
-        }
-        if (result.value.signaled) return;
-        toastManager.add({
-          type: "error",
-          title: `Could not send ${signal}`,
-          description: Option.getOrElse(
-            result.value.message,
-            () => `Failed to send ${signal} to process ${process.identity.pid}.`,
-          ),
-        });
-      })
-      .catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: `Could not send ${signal}`,
-          description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
-        });
-      })
-      .finally(() => {
-        clearSignaling();
-      });
-  };
 
   const retryCollector = () => {
     const environmentId = environmentIdRef.current;

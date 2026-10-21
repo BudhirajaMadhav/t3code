@@ -160,6 +160,11 @@ import {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
 } from "./provider.ts";
+import {
+  ProviderReadContextBreakdownError,
+  ProviderReadContextBreakdownInput,
+  ProviderReadContextBreakdownResult,
+} from "./providerContextBreakdown.ts";
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
@@ -355,6 +360,13 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
+import {
+  SidebarSectionNotFoundError,
+  SidebarSectionPersistenceError,
+  SidebarSectionsState,
+  SidebarSectionsUpdateInput,
+  SidebarSectionsUpdateResult,
+} from "./sidebarSection.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -408,6 +420,7 @@ export const WS_METHODS = {
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
   providerUploadFeedback: "provider.uploadFeedback",
+  providerReadContextBreakdown: "provider.readContextBreakdown",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
@@ -520,6 +533,9 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  sidebarSectionsSubscribe: "sidebarSections.subscribe",
+  sidebarSectionsUpdate: "sidebarSections.update",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -1344,6 +1360,12 @@ const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, 
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
 });
 
+const WsProviderReadContextBreakdownRpc = Rpc.make(WS_METHODS.providerReadContextBreakdown, {
+  payload: ProviderReadContextBreakdownInput,
+  success: ProviderReadContextBreakdownResult,
+  error: Schema.Union([ProviderReadContextBreakdownError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusSubscriptionInput,
   success: VcsStatusStreamEvent,
@@ -1784,6 +1806,23 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsSidebarSectionsSubscribeRpc = Rpc.make(WS_METHODS.sidebarSectionsSubscribe, {
+  payload: Schema.Struct({}),
+  success: SidebarSectionsState,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsSidebarSectionsUpdateRpc = Rpc.make(WS_METHODS.sidebarSectionsUpdate, {
+  payload: SidebarSectionsUpdateInput,
+  success: SidebarSectionsUpdateResult,
+  error: Schema.Union([
+    SidebarSectionNotFoundError,
+    SidebarSectionPersistenceError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -1868,7 +1907,8 @@ const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPo
 });
 
 const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTelemetry, {
-  payload: Schema.Struct({}),
+  // "summary" is for totals: while only summary subscribers listen, samples come every 5 s.
+  payload: Schema.Struct({ cadence: Schema.optionalKey(Schema.Literals(["live", "summary"])) }),
   success: ResourceTelemetrySnapshot,
   error: EnvironmentAuthorizationError,
   stream: true,
@@ -1941,6 +1981,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
+  WsSidebarSectionsSubscribeRpc,
+  WsSidebarSectionsUpdateRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
@@ -2009,6 +2051,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMcpAppsReadResourceRpc,
   WsMcpAppsUpdateModelContextRpc,
   WsProviderUploadFeedbackRpc,
+  WsProviderReadContextBreakdownRpc,
   WsSubscribeVcsStatusRpc,
   WsSubscribeWorktreeSetupRpc,
   WsWorktreeSetupCancelRpc,

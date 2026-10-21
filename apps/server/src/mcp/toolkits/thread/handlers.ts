@@ -21,6 +21,7 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import { checkSection, placeNewThreads } from "../sections/placement.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -114,6 +115,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   t3_thread_fork: writesThread((input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readThread(input.threadId);
+      yield* checkSection(input.sectionId);
       const commandId = yield* newCommandId();
       const targetThreadId = ThreadId.make(`${commandId}:fork`);
       const result = yield* threads
@@ -128,6 +130,11 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           creationSource: "mcp",
         })
         .pipe(Effect.mapError(dispatchFailure));
+      yield* placeNewThreads({
+        threadIds: [targetThreadId],
+        sectionId: input.sectionId,
+        parentThreadId: projection.thread.id,
+      });
       return { sequence: result.sequence, targetThreadId };
     }),
   ),

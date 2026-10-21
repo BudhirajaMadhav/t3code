@@ -44,6 +44,7 @@ const SAMPLE_INTERVAL_MS = 1_000;
 const IDLE_SAMPLE_INTERVAL_MS = 0;
 const BATTERY_SAMPLE_INTERVAL_MS = 5_000;
 const CONSTRAINED_SAMPLE_INTERVAL_MS = 15_000;
+const SUMMARY_SAMPLE_INTERVAL_MS = 5_000;
 const HANDSHAKE_TIMEOUT = Duration.seconds(5);
 const SAMPLE_REQUEST_TIMEOUT = Duration.seconds(5);
 const PROCESS_TABLE_REQUEST_TIMEOUT = Duration.seconds(5);
@@ -194,6 +195,10 @@ export class NativeTelemetryClient extends Context.Service<
     readonly setHostPowerState: (
       snapshot: HostPowerSnapshot,
     ) => Effect.Effect<void, NativeTelemetryClientError>;
+    /** While every live subscriber only shows totals, samples need not come faster than 5 s. */
+    readonly setSummaryOnly: (
+      summaryOnly: boolean,
+    ) => Effect.Effect<void, NativeTelemetryClientError>;
     readonly sampleNow: Effect.Effect<NativeTelemetrySnapshot, NativeTelemetryClientError>;
     readonly processTable: Effect.Effect<
       ReadonlyArray<ResourceMonitorProcessTableEntry>,
@@ -224,6 +229,7 @@ interface ClientState {
 export interface CollectionControl {
   readonly hostPower: HostPowerSnapshot;
   readonly liveSubscriberCount: number;
+  readonly summaryOnly?: boolean;
   readonly sampleIntervalMs: number;
 }
 
@@ -264,8 +270,14 @@ function isThermallyConstrained(snapshot: HostPowerSnapshot): boolean {
 export function resolveNativeSampleIntervalMs(
   snapshot: HostPowerSnapshot,
   liveSubscriberCount: number,
+  summaryOnly = false,
 ): number {
   if (liveSubscriberCount === 0) return IDLE_SAMPLE_INTERVAL_MS;
+  const intervalMs = resolveLiveSampleIntervalMs(snapshot);
+  return summaryOnly ? Math.max(intervalMs, SUMMARY_SAMPLE_INTERVAL_MS) : intervalMs;
+}
+
+function resolveLiveSampleIntervalMs(snapshot: HostPowerSnapshot): number {
   if (snapshot.stale || snapshot.source === "unknown") return SAMPLE_INTERVAL_MS;
   if (
     snapshot.suspended ||
@@ -816,7 +828,22 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     updateCollectionControl((current) => ({
       ...current,
       hostPower,
-      sampleIntervalMs: resolveNativeSampleIntervalMs(hostPower, current.liveSubscriberCount),
+      sampleIntervalMs: resolveNativeSampleIntervalMs(
+        hostPower,
+        current.liveSubscriberCount,
+        current.summaryOnly,
+      ),
+    }));
+
+  const setSummaryOnly: NativeTelemetryClient["Service"]["setSummaryOnly"] = (summaryOnly) =>
+    updateCollectionControl((current) => ({
+      ...current,
+      summaryOnly,
+      sampleIntervalMs: resolveNativeSampleIntervalMs(
+        current.hostPower,
+        current.liveSubscriberCount,
+        summaryOnly,
+      ),
     }));
 
   const changeLiveSubscriberCount = Effect.fn(
@@ -827,7 +854,11 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       return {
         ...current,
         liveSubscriberCount,
-        sampleIntervalMs: resolveNativeSampleIntervalMs(current.hostPower, liveSubscriberCount),
+        sampleIntervalMs: resolveNativeSampleIntervalMs(
+          current.hostPower,
+          liveSubscriberCount,
+          current.summaryOnly,
+        ),
       };
     });
   });
@@ -1046,6 +1077,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     readHistory,
     setExternalProcesses,
     setHostPowerState,
+    setSummaryOnly,
     sampleNow,
     processTable,
     retry: Ref.get(state).pipe(
@@ -1096,6 +1128,7 @@ export const layerTest = (
         ),
       setExternalProcesses: () => Effect.void,
       setHostPowerState: () => Effect.void,
+      setSummaryOnly: () => Effect.void,
       sampleNow: Effect.fail(
         new NativeTelemetryUnavailable({
           reason: "No resource monitor sample was configured for this test.",
