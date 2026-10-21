@@ -84,6 +84,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as SidebarSectionsTestkit from "../sidebarSections/SidebarSections.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -91,6 +92,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(SidebarSectionsTestkit.layer),
 );
 
 // Effect returns a declared tool failure as `isError` with its encoded payload
@@ -721,7 +723,7 @@ describe("orchestrator MCP toolkit", () => {
           );
           const layerTest = Layer.merge(
             layerOrchestratorToolkit,
-            McpHttpServer.layerThreadToolkit,
+            McpHttpServer.layerThreadToolkit.pipe(Layer.provide(SidebarSectionsTestkit.layer)),
           ).pipe(
             Layer.provideMerge(McpServer.McpServer.layer),
             Layer.provideMerge(layerOrchestration),

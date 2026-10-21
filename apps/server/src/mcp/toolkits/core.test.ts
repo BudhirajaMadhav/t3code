@@ -61,12 +61,15 @@ import { ProjectToolkit } from "./project/tools.ts";
 import { AttachmentToolkit } from "./attachment/tools.ts";
 import * as AttachmentHandlers from "./attachment/handlers.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
+import { SectionToolkit } from "./sections/tools.ts";
+import * as SidebarSectionsTestkit from "../../sidebarSections/SidebarSections.testkit.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 import { DeviceToolkit } from "./device/tools.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(SidebarSectionsTestkit.layer),
 );
 
 // Effect returns a declared tool failure as `isError` with its encoded payload
@@ -90,6 +93,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+  Layer.provide(SidebarSectionsTestkit.layer),
 );
 
 it("publishes unique tool names with reference-free object-root inputs", () => {
@@ -99,6 +103,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     PreviewToolkit,
     WorktreeToolkit,
     ThreadToolkit,
+    SectionToolkit,
     AttachmentToolkit,
     ProjectToolkit,
     EnvironmentToolkit,
