@@ -1,4 +1,5 @@
 import {
+  type ProviderContextBreakdown,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -7,9 +8,9 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  breakdownRows,
   cacheCountdown,
   formatCacheLifetime,
+  splitBreakdown,
   threadAccount,
 } from "./composerContext.logic";
 
@@ -48,24 +49,47 @@ describe("formatCacheLifetime", () => {
   });
 });
 
-describe("breakdownRows", () => {
-  it("measures each row against the window, deferred rows included", () => {
-    const rows = breakdownRows({
-      model: "claude-opus-4-7",
-      totalTokens: 300_000,
+describe("splitBreakdown", () => {
+  const breakdown = (categories: ProviderContextBreakdown["categories"]) =>
+    splitBreakdown({
+      model: "claude-haiku-5-5",
+      totalTokens: 45_000,
       maxTokens: 1_000_000,
-      categories: [
-        { name: "Free space", tokens: 650_000, kind: "free" },
-        { name: "Messages", tokens: 250_000, kind: "used" },
-        { name: "System tools (deferred)", tokens: 32_000, kind: "deferred" },
-      ],
+      categories,
       checkedAt: "2026-10-21T00:00:00.000Z",
     });
-    expect(rows.map(({ name, percent }) => [name, percent])).toEqual([
-      ["Free space", 65],
-      ["Messages", 25],
-      ["System tools (deferred)", 3.2],
+
+  it("keeps deferred tools out of the context rows, which total 100%", () => {
+    const split = breakdown([
+      { name: "Free space", tokens: 920_000, kind: "free" },
+      { name: "MCP tools (deferred)", tokens: 160_000, kind: "deferred" },
+      { name: "Autocompact buffer", tokens: 33_000, kind: "buffer" },
+      { name: "System tools (deferred)", tokens: 32_000, kind: "deferred" },
+      { name: "Messages", tokens: 47_000, kind: "used" },
     ]);
+
+    expect(split.inContext.map(({ name, tokens }) => [name, tokens])).toEqual([
+      ["Free space", 920_000],
+      ["Autocompact buffer", 33_000],
+      ["Messages", 47_000],
+    ]);
+    expect(split.inContext[0]?.percent).toBe(92);
+    expect(split.totalPercent).toBe(100);
+    expect(split.onDemand.map(({ name, percent }) => [name, percent])).toEqual([
+      ["MCP tools", 16],
+      ["System tools", 3.2],
+    ]);
+  });
+
+  it("classifies by kind, not by the label", () => {
+    const split = breakdown([
+      { name: "Free space", tokens: 990_000, kind: "free" },
+      { name: "Plugins (deferred)", tokens: 10_000, kind: "used" },
+      { name: "Workflow tools", tokens: 5_000, kind: "deferred" },
+    ]);
+
+    expect(split.inContext.map((row) => row.name)).toEqual(["Free space", "Plugins (deferred)"]);
+    expect(split.onDemand.map((row) => row.name)).toEqual(["Workflow tools"]);
   });
 });
 

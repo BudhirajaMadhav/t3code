@@ -31,11 +31,27 @@ export function formatCacheLifetime(ttlMs: number): string {
     : `${Math.round(ttlMs / MINUTE)}m`;
 }
 
-export function breakdownRows(breakdown: ProviderContextBreakdown) {
-  return breakdown.categories.map((category) => ({
+/**
+ * Rows in the context window, which add up to the window, apart from rows
+ * Claude marks `deferred`: tool schemas that load only when the model first
+ * uses them. Both are measured against the window.
+ */
+export function splitBreakdown(breakdown: ProviderContextBreakdown) {
+  const percentOf = (tokens: number) =>
+    breakdown.maxTokens > 0 ? (tokens / breakdown.maxTokens) * 100 : 0;
+  const rows = breakdown.categories.map((category) => ({
     ...category,
-    percent: breakdown.maxTokens > 0 ? (category.tokens / breakdown.maxTokens) * 100 : 0,
+    percent: percentOf(category.tokens),
   }));
+  const inContext = rows.filter((row) => row.kind !== "deferred");
+  return {
+    inContext,
+    totalPercent: percentOf(inContext.reduce((sum, row) => sum + row.tokens, 0)),
+    // The kind already says deferred; the label keeps Claude Code's suffix.
+    onDemand: rows
+      .filter((row) => row.kind === "deferred")
+      .map((row) => ({ ...row, name: row.name.replace(/\s*\(deferred\)$/i, "") })),
+  };
 }
 
 // Auth types that name how the provider signs in rather than a plan.

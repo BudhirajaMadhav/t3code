@@ -24,7 +24,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { LimitWindows } from "../usage/UsageLimits";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import {
-  breakdownRows,
+  splitBreakdown,
   cacheCountdown,
   formatCacheLifetime,
   threadAccount,
@@ -340,23 +340,45 @@ function BreakdownSection(props: {
     };
   }, [read, environmentId, threadId]);
 
-  return (
-    <Section title="Breakdown">
-      {state.status === "loading" ? (
-        <div className="text-secondary-label text-2xs">Reading Claude's context…</div>
-      ) : state.status === "failed" ? (
-        <div className="text-secondary-label text-2xs">Claude did not report its context.</div>
-      ) : state.breakdown === null ? (
+  if (state.status !== "ready" || state.breakdown === null) {
+    return (
+      <Section title="Breakdown">
         <div className="text-pretty text-secondary-label text-2xs">
-          Claude reports this while its session runs. It returns with your next message.
+          {state.status === "loading"
+            ? "Reading Claude's context…"
+            : state.status === "failed"
+              ? "Claude did not report its context."
+              : "Claude reports this while its session runs. It returns with your next message."}
         </div>
-      ) : (
-        breakdownRows(state.breakdown).map((row) => (
+      </Section>
+    );
+  }
+  const { inContext, totalPercent, onDemand } = splitBreakdown(state.breakdown);
+  return (
+    <>
+      <Section title="Breakdown">
+        {inContext.map((row) => (
           <Row key={row.name} label={row.name}>
             {formatPercent(row.percent)}
           </Row>
-        ))
-      )}
-    </Section>
+        ))}
+        <div className="border-t border-border/60 pt-1.5">
+          <Row label="Total">{formatPercent(totalPercent)}</Row>
+        </div>
+      </Section>
+      {onDemand.length > 0 ? (
+        <div className="flex flex-col gap-1.5 rounded-md border border-border/60 p-2">
+          <div className="font-medium text-muted-foreground text-xs">Loads on demand</div>
+          {onDemand.map((row) => (
+            <Row key={row.name} label={row.name}>
+              {formatPercent(row.percent)}
+            </Row>
+          ))}
+          <div className="text-pretty text-secondary-label text-2xs">
+            Not in the context yet. A tool loads the first time the model uses it.
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
