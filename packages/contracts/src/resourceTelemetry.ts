@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 import { DesktopUpdateStateSchema } from "./ipc.ts";
 
@@ -378,6 +378,8 @@ export const ResourceTelemetryProcess = Schema.Struct({
   runTimeMs: NonNegativeInt,
   firstSeenAt: Schema.DateTimeUtc,
   lastSeenAt: Schema.DateTimeUtc,
+  /** The thread whose agent or terminal launched this process or one of its ancestors. */
+  threadId: Schema.optionalKey(ThreadId),
 });
 export type ResourceTelemetryProcess = typeof ResourceTelemetryProcess.Type;
 

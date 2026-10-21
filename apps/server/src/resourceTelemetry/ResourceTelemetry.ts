@@ -30,6 +30,7 @@ import {
   type TelemetryCounters,
 } from "./Model.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { attributeProcessThreads, ProcessThreadOwners } from "./ProcessThreadOwners.ts";
 import * as ResourceAttribution from "./ResourceAttribution.ts";
 import {
   buildResourceTelemetryHistory,
@@ -147,6 +148,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
   const nativeClient = yield* NativeTelemetryClient.NativeTelemetryClient;
   const desktopReceiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const attribution = yield* ResourceAttribution.ResourceAttribution;
+  const processOwners = yield* ProcessThreadOwners;
   const mutex = yield* Semaphore.make(1);
   const changes = yield* PubSub.sliding<ResourceTelemetrySnapshot>(8);
   const initialReadAt = yield* DateTime.now;
@@ -184,7 +186,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
   const initialSnapshot: ResourceTelemetrySnapshot = {
     readAt: initialReadAt,
     sampleIntervalMs: initialNativeHealth.sampleIntervalMs,
-    processes: initialMerge.processes,
+    processes: attributeProcessThreads(initialMerge.processes, processOwners.current()),
     groups: initialMerge.groups,
     power: Option.match(initialDesktop, {
       onNone: () => unknownPower(initialReadAt),
@@ -297,7 +299,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
         const snapshot: ResourceTelemetrySnapshot = {
           readAt,
           sampleIntervalMs: nativeHealth.sampleIntervalMs,
-          processes: merged.processes,
+          processes: attributeProcessThreads(merged.processes, processOwners.current()),
           groups: merged.groups,
           power: Option.match(desktopSnapshot, {
             onNone: () => unknownPower(readAt),
