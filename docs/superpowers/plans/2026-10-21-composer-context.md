@@ -32,7 +32,8 @@ Branch: `custom/composer-context`.
    model picker. The spec asks for one shared control, and that is the slot D names.
 3. **Countdown rules:** Claude selection only; hidden while a turn runs; whole minutes rounded down,
    "<1m" in the last minute; amber below 10 minutes (warning theme token); hidden at expiry. The
-   chip owns its timer and re-renders only when the label changes, never the composer.
+   label is its own small component on the app's shared one-second clock, so the composer does not
+   re-render.
 4. **Setting:** new client setting "Context popover" (Settings → General, on by default). On: the
    new control takes the slot. Off: the legacy toggle works exactly as upstream.
 5. **Breakdown transport:** a new request/response RPC `provider.readContextBreakdown`
