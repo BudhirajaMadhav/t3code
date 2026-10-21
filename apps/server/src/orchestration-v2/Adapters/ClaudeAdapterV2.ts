@@ -1,5 +1,6 @@
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+import { claudeContextBreakdown } from "./claudeContextBreakdown.ts";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -40,6 +41,7 @@ import {
   type SpawnedProcess as ClaudeSpawnedProcess,
   type SDKAssistantMessage,
   type SDKAPIRetryMessage,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -494,6 +496,10 @@ export interface ClaudeAgentSdkQuerySession {
   readonly backgroundTasks: (
     toolUseId: string,
   ) => Effect.Effect<boolean, ClaudeAgentSdkQueryRunnerError>;
+  readonly getContextUsage?: Effect.Effect<
+    SDKControlGetContextUsageResponse,
+    ClaudeAgentSdkQueryRunnerError
+  >;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
@@ -1088,6 +1094,11 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
+          // "summary" answers locally, without a token-count API call per category.
+          getContextUsage: Effect.tryPromise({
+            try: () => queryRuntime.getContextUsage({ detail: "summary" }),
+            catch: (cause) => queryRunnerError(cause, "getContextUsage"),
+          }),
           interrupt: Effect.tryPromise({
             try: () => queryRuntime.interrupt(),
             catch: (cause) => queryRunnerError(cause, "interrupt"),
@@ -10068,6 +10079,31 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   }),
               ),
             );
+          }),
+          readContextBreakdown: Effect.fn("ClaudeAdapterV2.readContextBreakdown")(function* ({
+            providerThread,
+          }) {
+            const liveQuery = yield* Ref.get(queryContext);
+            if (
+              liveQuery === null ||
+              liveQuery.stopping ||
+              liveQuery.nativeThreadId !== providerThread.nativeThreadRef?.nativeId ||
+              liveQuery.query.getContextUsage === undefined
+            ) {
+              return null;
+            }
+            const usage = yield* liveQuery.query.getContextUsage.pipe(
+              Effect.timeout("10 seconds"),
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: "Claude Code did not report its context usage.",
+                    cause,
+                  }),
+              ),
+            );
+            return claudeContextBreakdown(usage, DateTime.formatIso(yield* DateTime.now));
           }),
           interruptTurn,
           stopSubagent: Effect.fn("ClaudeAdapterV2.stopSubagent")(function* (input) {
