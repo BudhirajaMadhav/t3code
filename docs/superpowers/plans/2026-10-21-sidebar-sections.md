@@ -58,6 +58,7 @@ Design: `docs/superpowers/specs/2026-10-21-custom-sections-cache-resources-desig
   section). Section header menu: Rename..., Move up, Move down, Delete.
 - Sections are per environment. A thread joins only its own environment's sections; a section of
   a non-primary environment shows the environment label.
+- A muted "Other threads" divider marks where the sections end and the usual list starts.
 - Empty sections show unless a project filter is active. Search results stay flat. The legacy
   sidebar ignores sections. No mobile changes. No command-palette entry.
 
