@@ -5570,6 +5570,7 @@ export default function ChatView(props: ChatViewProps) {
       usedTokens: activeContextWindow.usedTokens,
       updatedAt: activeContextWindow.updatedAt,
       promptCacheTtlMs: activeThreadLiveTokenUsage?.promptCacheTtlMs,
+      promptCacheExpiresAt: activeThreadLiveTokenUsage?.promptCacheExpiresAt,
       now: `${nowMinute}:00.000Z`,
     })
       ? activeContextWindow.usedTokens
