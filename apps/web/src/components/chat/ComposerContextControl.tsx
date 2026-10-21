@@ -50,6 +50,7 @@ export interface ComposerContextData {
 const CLAUDE_DRIVER = "claudeAgent";
 
 function formatPercent(value: number): string {
+  if (value > 0 && value < 0.1) return "<0.1%";
   return value < 10 ? `${value.toFixed(1).replace(/\.0$/, "")}%` : `${Math.round(value)}%`;
 }
 
@@ -109,7 +110,7 @@ export function ComposerContextControl(props: {
         side="top"
         align="end"
         padding="none"
-        width="md"
+        width="lg"
         className="text-left whitespace-normal"
       >
         <ContextPopoverBody {...props} />
