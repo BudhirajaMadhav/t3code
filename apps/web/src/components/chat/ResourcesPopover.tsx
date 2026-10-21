@@ -34,19 +34,22 @@ const subscribeVisibility = (onChange: () => void) => {
 const formatCpu = (percent: number) => `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
 
 /**
- * A live subscriber makes the sidecar walk the process table on every sample, so the chip only
- * listens while the page is visible.
+ * Each subscriber makes the sidecar walk the process table, so the chip listens only while the
+ * page is visible, for totals every 5 s, and for every sample only while the popover is open.
  */
 export function ResourcesChip({ environmentId }: { environmentId: EnvironmentId }) {
+  const [open, setOpen] = useState(false);
   const visible = useSyncExternalStore(
     subscribeVisibility,
     () => document.visibilityState === "visible",
   );
-  const snapshot = useResourceTelemetry(visible ? environmentId : null).data;
+  const summary = useResourceTelemetry(visible ? environmentId : null, "summary").data;
+  const live = useResourceTelemetry(visible && open ? environmentId : null).data;
+  const snapshot = live ?? summary;
   if (snapshot === null || snapshot.processes.length === 0) return null;
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
           <Button

@@ -3113,10 +3113,13 @@ export const layerWsRpc = (
               Stream.concat(Stream.make(latest), changes),
             ),
           ),
-        [WS_METHODS.subscribeResourceTelemetry]: (_input) =>
+        [WS_METHODS.subscribeResourceTelemetry]: (input) =>
           Stream.unwrap(
-            Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
-              Stream.concat(Stream.make(latest), changes),
+            Effect.map(
+              input.cadence === "summary"
+                ? resourceTelemetry.subscribeSummary
+                : resourceTelemetry.subscribe,
+              ({ latest, changes }) => Stream.concat(Stream.make(latest), changes),
             ),
           ),
       });

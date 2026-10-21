@@ -1868,7 +1868,8 @@ const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPo
 });
 
 const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTelemetry, {
-  payload: Schema.Struct({}),
+  // "summary" is for totals: while only summary subscribers listen, samples come every 5 s.
+  payload: Schema.Struct({ cadence: Schema.optionalKey(Schema.Literals(["live", "summary"])) }),
   success: ResourceTelemetrySnapshot,
   error: EnvironmentAuthorizationError,
   stream: true,

@@ -8,11 +8,13 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -254,6 +256,37 @@ describe("ResourceTelemetry", () => {
       ).pipe(Effect.provide(layerTelemetry));
 
       expect(Option.isSome(live)).toBe(true);
+      expect(yield* Ref.get(demandChanges)).toEqual([true, false]);
+    }),
+  );
+
+  it.effect("samples slowly while only totals listen and fully while a live view is open", () =>
+    Effect.gen(function* () {
+      const summaryOnlyChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
+      const demandChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
+      const layerNative = NativeTelemetryClient.layerTest({
+        setSummaryOnly: (summaryOnly) =>
+          Ref.update(summaryOnlyChanges, (changes) => [...changes, summaryOnly]),
+      });
+      const layerDesktop = DesktopTelemetryReceiver.layerTest({
+        setDiagnosticsDemand: (enabled) =>
+          Ref.update(demandChanges, (changes) => [...changes, enabled]),
+      });
+      const layerTelemetry = ResourceTelemetry.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
+      );
+
+      yield* Effect.gen(function* () {
+        const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+        const summaryScope = yield* Scope.make();
+        yield* telemetry.subscribeSummary.pipe(Effect.provideService(Scope.Scope, summaryScope));
+        const liveScope = yield* Scope.make();
+        yield* telemetry.subscribe.pipe(Effect.provideService(Scope.Scope, liveScope));
+        yield* Scope.close(liveScope, Exit.void);
+        yield* Scope.close(summaryScope, Exit.void);
+      }).pipe(Effect.provide(layerTelemetry));
+
+      expect(yield* Ref.get(summaryOnlyChanges)).toEqual([true, false, true, false]);
       expect(yield* Ref.get(demandChanges)).toEqual([true, false]);
     }),
   );
