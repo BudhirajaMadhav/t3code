@@ -71,6 +71,13 @@ describe("resolveNativeSampleIntervalMs", () => {
     expect(resolveNativeSampleIntervalMs(basePower, 0)).toBe(0);
     expect(resolveNativeSampleIntervalMs(basePower, 1)).toBe(1_000);
   });
+
+  it("samples totals-only subscribers every 5 s, never faster than the host allows", () => {
+    expect(resolveNativeSampleIntervalMs(basePower, 1, true)).toBe(5_000);
+    expect(resolveNativeSampleIntervalMs({ ...basePower, onBattery: "true" }, 1, true)).toBe(5_000);
+    expect(resolveNativeSampleIntervalMs({ ...basePower, locked: "true" }, 1, true)).toBe(15_000);
+    expect(resolveNativeSampleIntervalMs(basePower, 0, true)).toBe(0);
+  });
 });
 
 const decodeCommandLine = Schema.decodeUnknownSync(Schema.fromJsonString(ResourceMonitorCommand));

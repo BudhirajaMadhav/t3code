@@ -27,6 +27,8 @@ import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { NavigationHistoryButtons } from "./NavigationHistoryButtons";
+import { ResourcesChip } from "./ResourcesPopover";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -398,6 +400,8 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <NavigationHistoryButtons />
+      <ResourcesChip environmentId={activeThreadEnvironmentId} />
     </div>
   );
 });

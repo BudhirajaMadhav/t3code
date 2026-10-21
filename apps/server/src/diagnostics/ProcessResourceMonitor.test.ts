@@ -109,6 +109,7 @@ describe("ProcessResourceMonitor", () => {
         latest: Effect.die("unused"),
         changes: Stream.empty,
         subscribe: Effect.die("unused"),
+        subscribeSummary: Effect.die("unused"),
         readHistory: () => Effect.succeed(history),
         refresh: Effect.die("unused"),
         validateProcessIdentity: () => Effect.die("unused"),

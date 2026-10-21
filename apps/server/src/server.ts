@@ -166,6 +166,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ProcessThreadOwners from "./resourceTelemetry/ProcessThreadOwners.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
@@ -1062,6 +1063,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(ProcessThreadOwners.layer),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

@@ -125,6 +125,7 @@ import {
   MCP_APP_RESOURCE_SCHEME,
 } from "@t3tools/shared/mcpApp";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
+import { ProcessThreadOwners } from "../../resourceTelemetry/ProcessThreadOwners.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -1539,6 +1540,7 @@ export const layerAppServerClientFactory: Layer.Layer<
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const processOwners = yield* ProcessThreadOwners;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1565,6 +1567,11 @@ export const layerAppServerClientFactory: Layer.Layer<
                 cause,
               }),
           ),
+        );
+        processOwners.register(handle.pid, input.threadId);
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.sync(() => processOwners.unregister(handle.pid)),
         );
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,

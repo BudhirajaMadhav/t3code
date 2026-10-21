@@ -121,6 +121,11 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import {
+  ProcessThreadOwners,
+  trackChildProcess,
+  type ProcessThreadOwnersShape,
+} from "../../resourceTelemetry/ProcessThreadOwners.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import {
   planClaudeSkillDispatch,
@@ -317,7 +322,11 @@ const BACKGROUND_MOVE_TIMEOUT_MS = 5_000;
  * reads (#3089). Those stay in the CLI's group, so the rest of the group gets SIGKILL once the
  * CLI exits for any reason.
  */
-function spawnClaudeProcessGroup(options: ClaudeSpawnOptions): ClaudeSpawnedProcess {
+function spawnClaudeProcessGroup(
+  options: ClaudeSpawnOptions,
+  processOwners: ProcessThreadOwnersShape,
+  threadId: ThreadId,
+): ClaudeSpawnedProcess {
   const child = NodeChildProcess.spawn(options.command, options.args, {
     cwd: options.cwd,
     env: options.env,
@@ -325,6 +334,7 @@ function spawnClaudeProcessGroup(options: ClaudeSpawnOptions): ClaudeSpawnedProc
     stdio: ["pipe", "pipe", "ignore"],
     detached: true,
   });
+  trackChildProcess(processOwners, threadId, child);
   child.once("exit", () => {
     try {
       signalProcessGroup(child.pid ?? 0, "SIGKILL");
@@ -877,6 +887,7 @@ export const layerQueryRunner: Layer.Layer<
     const path = yield* Path.Path;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const processOwners = yield* ProcessThreadOwners;
     const platform = yield* HostProcess.Platform;
 
     return ClaudeAgentSdkQueryRunner.of({
@@ -931,7 +942,10 @@ export const layerQueryRunner: Layer.Layer<
         // Windows has no process groups, so there the SDK spawns the CLI itself.
         const spawnClaudeCodeProcess =
           options.spawnClaudeCodeProcess ??
-          (platform === "win32" ? undefined : spawnClaudeProcessGroup);
+          (platform === "win32"
+            ? undefined
+            : (spawnOptions: ClaudeSpawnOptions) =>
+                spawnClaudeProcessGroup(spawnOptions, processOwners, input.threadId));
         const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
           Effect.try({
             try: () =>

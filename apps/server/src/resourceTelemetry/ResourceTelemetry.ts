@@ -30,6 +30,7 @@ import {
   type TelemetryCounters,
 } from "./Model.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { attributeProcessThreads, ProcessThreadOwners } from "./ProcessThreadOwners.ts";
 import * as ResourceAttribution from "./ResourceAttribution.ts";
 import {
   buildResourceTelemetryHistory,
@@ -50,19 +51,23 @@ export class ResourceTelemetryRefreshFailed extends Schema.TaggedError<ResourceT
   }
 }
 
+type TelemetrySubscription = Effect.Effect<
+  {
+    readonly latest: ResourceTelemetrySnapshot;
+    readonly changes: Stream.Stream<ResourceTelemetrySnapshot>;
+  },
+  never,
+  Scope.Scope
+>;
+
 export class ResourceTelemetry extends Context.Service<
   ResourceTelemetry,
   {
     readonly latest: Effect.Effect<ResourceTelemetrySnapshot>;
     readonly changes: Stream.Stream<ResourceTelemetrySnapshot>;
-    readonly subscribe: Effect.Effect<
-      {
-        readonly latest: ResourceTelemetrySnapshot;
-        readonly changes: Stream.Stream<ResourceTelemetrySnapshot>;
-      },
-      never,
-      Scope.Scope
-    >;
+    readonly subscribe: TelemetrySubscription;
+    /** Like `subscribe`, for totals: while only these listen, samples come at most every 5 s. */
+    readonly subscribeSummary: TelemetrySubscription;
     readonly readHistory: (
       input: ResourceTelemetryHistoryInput,
     ) => Effect.Effect<ResourceTelemetryHistoryWithLegacyBuckets>;
@@ -86,6 +91,8 @@ interface TelemetryState {
 
 interface LiveTelemetryState {
   readonly retainCount: number;
+  /** Retainers that want every sample rather than totals. */
+  readonly liveCount: number;
   readonly scope: Option.Option<Scope.Closeable>;
 }
 
@@ -147,6 +154,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
   const nativeClient = yield* NativeTelemetryClient.NativeTelemetryClient;
   const desktopReceiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const attribution = yield* ResourceAttribution.ResourceAttribution;
+  const processOwners = yield* ProcessThreadOwners;
   const mutex = yield* Semaphore.make(1);
   const changes = yield* PubSub.sliding<ResourceTelemetrySnapshot>(8);
   const initialReadAt = yield* DateTime.now;
@@ -184,7 +192,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
   const initialSnapshot: ResourceTelemetrySnapshot = {
     readAt: initialReadAt,
     sampleIntervalMs: initialNativeHealth.sampleIntervalMs,
-    processes: initialMerge.processes,
+    processes: attributeProcessThreads(initialMerge.processes, processOwners.current()),
     groups: initialMerge.groups,
     power: Option.match(initialDesktop, {
       onNone: () => unknownPower(initialReadAt),
@@ -209,6 +217,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
   });
   const liveState = yield* Ref.make<LiveTelemetryState>({
     retainCount: 0,
+    liveCount: 0,
     scope: Option.none(),
   });
   const liveMutex = yield* Semaphore.make(1);
@@ -297,7 +306,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
         const snapshot: ResourceTelemetrySnapshot = {
           readAt,
           sampleIntervalMs: nativeHealth.sampleIntervalMs,
-          processes: merged.processes,
+          processes: attributeProcessThreads(merged.processes, processOwners.current()),
           groups: merged.groups,
           power: Option.match(desktopSnapshot, {
             onNone: () => unknownPower(readAt),
@@ -360,57 +369,86 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
     Effect.forkScoped,
   );
 
-  const acquireLive = liveMutex.withPermits(1)(
-    Effect.uninterruptible(
+  // Totals do not need the desktop's fast Electron metrics or 1 s native samples.
+  const applyCadence = Effect.fnUntraced(function* (previousLiveCount: number, liveCount: number) {
+    yield* nativeClient.setSummaryOnly(liveCount === 0).pipe(Effect.ignore);
+    if (previousLiveCount > 0 !== liveCount > 0) {
+      yield* desktopReceiver.setDiagnosticsDemand(liveCount > 0).pipe(Effect.ignore);
+    }
+  });
+
+  const acquireLive = (live: boolean) =>
+    liveMutex.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(liveState);
+          const liveCount = current.liveCount + (live ? 1 : 0);
+          yield* applyCadence(current.liveCount, liveCount);
+          if (current.retainCount > 0) {
+            yield* Ref.set(liveState, {
+              ...current,
+              retainCount: current.retainCount + 1,
+              liveCount,
+            });
+            return;
+          }
+
+          const scope = yield* Scope.make();
+          yield* nativeClient.snapshots.pipe(
+            Stream.runForEach(ingestNative),
+            Effect.catch((error) =>
+              Effect.logWarning("Native resource telemetry stream stopped", {
+                cause: error.message,
+              }),
+            ),
+            Effect.forkIn(scope),
+          );
+          yield* nativeClient.sampleNow.pipe(
+            Effect.flatMap(ingestNative),
+            Effect.ignore,
+            Effect.forkIn(scope),
+          );
+          yield* Ref.set(liveState, { retainCount: 1, liveCount, scope: Option.some(scope) });
+        }),
+      ),
+    );
+
+  const releaseLive = (live: boolean) =>
+    liveMutex.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* Ref.get(liveState);
-        if (current.retainCount > 0) {
-          yield* Ref.set(liveState, { ...current, retainCount: current.retainCount + 1 });
+        if (current.retainCount <= 1) {
+          yield* Ref.set(liveState, { retainCount: 0, liveCount: 0, scope: Option.none() });
+          if (Option.isSome(current.scope)) {
+            yield* Scope.close(current.scope.value, Exit.void).pipe(Effect.ignore);
+          }
+          yield* nativeClient.setSummaryOnly(false).pipe(Effect.ignore);
+          if (current.liveCount > 0) {
+            yield* desktopReceiver.setDiagnosticsDemand(false).pipe(Effect.ignore);
+          }
           return;
         }
-
-        const scope = yield* Scope.make();
-        yield* desktopReceiver.setDiagnosticsDemand(true).pipe(Effect.ignore);
-        yield* nativeClient.snapshots.pipe(
-          Stream.runForEach(ingestNative),
-          Effect.catch((error) =>
-            Effect.logWarning("Native resource telemetry stream stopped", {
-              cause: error.message,
-            }),
-          ),
-          Effect.forkIn(scope),
-        );
-        yield* nativeClient.sampleNow.pipe(
-          Effect.flatMap(ingestNative),
-          Effect.ignore,
-          Effect.forkIn(scope),
-        );
-        yield* Ref.set(liveState, { retainCount: 1, scope: Option.some(scope) });
+        const liveCount = current.liveCount - (live ? 1 : 0);
+        yield* applyCadence(current.liveCount, liveCount);
+        yield* Ref.set(liveState, {
+          ...current,
+          retainCount: current.retainCount - 1,
+          liveCount,
+        });
       }),
-    ),
-  );
-
-  const releaseLive = liveMutex.withPermits(1)(
-    Effect.gen(function* () {
-      const current = yield* Ref.get(liveState);
-      if (current.retainCount <= 1) {
-        yield* Ref.set(liveState, { retainCount: 0, scope: Option.none() });
-        if (Option.isSome(current.scope)) {
-          yield* Scope.close(current.scope.value, Exit.void).pipe(Effect.ignore);
-        }
-        yield* desktopReceiver.setDiagnosticsDemand(false).pipe(Effect.ignore);
-        return;
-      }
-      yield* Ref.set(liveState, { ...current, retainCount: current.retainCount - 1 });
-    }),
-  );
+    );
 
   const latest = Ref.get(state).pipe(Effect.map((current) => current.latest));
-  const subscribe = subscribeBeforeSnapshot(
-    changes,
-    Effect.acquireRelease(acquireLive, () => releaseLive).pipe(Effect.andThen(latest)),
-    mutex,
-  );
+  const retainedSubscription = (live: boolean) =>
+    subscribeBeforeSnapshot(
+      changes,
+      Effect.acquireRelease(acquireLive(live), () => releaseLive(live)).pipe(
+        Effect.andThen(latest),
+      ),
+      mutex,
+    );
+  const subscribe = retainedSubscription(true);
+  const subscribeSummary = retainedSubscription(false);
   const liveChanges = Stream.unwrap(Effect.map(subscribe, ({ changes }) => changes));
 
   const readHistory: ResourceTelemetry["Service"]["readHistory"] = Effect.fn(
@@ -487,6 +525,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
     latest,
     changes: liveChanges,
     subscribe,
+    subscribeSummary,
     readHistory,
     refresh,
     validateProcessIdentity,
