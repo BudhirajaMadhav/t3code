@@ -348,7 +348,7 @@ function restartDelay(attempt: number): Duration.Duration {
   return Duration.min(Duration.times(INITIAL_RESTART_DELAY, 2 ** attempt), MAX_RESTART_DELAY);
 }
 
-export function retainRecentNativeTelemetryFailures(
+function retainRecentNativeTelemetryFailures(
   failures: ReadonlyArray<number>,
   now: number,
 ): ReadonlyArray<number> {
@@ -359,14 +359,14 @@ function errorMessage(error: NativeTelemetryClientError): string {
   return error.message;
 }
 
-export function canRequestNativeTelemetryRetry(
+function canRequestNativeTelemetryRetry(
   status: ResourceTelemetrySourceStatus,
   hasHandle: boolean,
 ): boolean {
   return status !== "healthy" && status !== "starting" && !hasHandle;
 }
 
-export function canCommandNativeTelemetrySidecar(
+function canCommandNativeTelemetrySidecar(
   status: ResourceTelemetrySourceStatus,
   hasHandle: boolean,
 ): boolean {

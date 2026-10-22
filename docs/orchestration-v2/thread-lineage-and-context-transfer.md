@@ -79,7 +79,11 @@ Thread relationship describes why a target thread or run exists relative to anot
 
 ```ts
 type ThreadRelationshipKind =
-  "fork" | "provider_handoff" | "merge_back" | "subagent_spawn" | "subagent_result";
+  | "fork"
+  | "provider_handoff"
+  | "merge_back"
+  | "subagent_spawn"
+  | "subagent_result";
 ```
 
 Relationships are product-level and provider-neutral. A fork is not the same thing as a provider-native fork. A provider-native fork is one possible resolution strategy for a fork relationship.
@@ -116,7 +120,12 @@ type ContextTransfer = {
   sourceProvider?: ProviderKind;
   targetProvider?: ProviderKind;
   status:
-    "pending" | "resolved_native" | "resolved_portable" | "failed" | "consumed" | "superseded";
+    | "pending"
+    | "resolved_native"
+    | "resolved_portable"
+    | "failed"
+    | "consumed"
+    | "superseded";
   resolution?: ContextTransferResolution;
   createdBy: "user" | "agent" | "system";
   createdAt: string;
@@ -269,6 +278,18 @@ The first backend slice implements lazy same-provider fork resolution:
 
 This keeps the runtime aligned with the architecture while making portable context explicit and
 auditable through `ContextTransfer` and `ContextHandoff` records.
+
+## Linked Threads And Side Chats
+
+Lineage and presentation are separate facts. `thread.create` accepts a `parentThreadId` to link a
+thread under another one without any context transfer: lineage records the parent and leaves
+`relationshipToParent` null, so a thread that inherited nothing is never called a fork.
+
+A side chat is an ordinary thread with the `sideChat` flag, which only means "open in the right
+panel, keep out of the sidebar, discard on close while empty". It is either a `thread.fork` at `latest_stable`
+(shared history) or a linked thread (none). The flag does not select a relationship kind, and
+`thread.metadata.update` clears it to promote the thread. Fork copies the source thread, so it
+sets the flag explicitly instead of inheriting it.
 
 ## Relationship To Provider Switching
 

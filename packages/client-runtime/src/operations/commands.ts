@@ -76,13 +76,21 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Link under an existing thread without transferring any of its context. */
+  readonly parentThreadId?: ThreadId;
+  readonly sideChat?: boolean;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
   readonly threadId: ThreadId;
 }
 
-export type DeleteThreadInput = ThreadCommandInput;
+export interface DeleteThreadInput extends ThreadCommandInput {
+  /** Delete only while the thread has no message or run yet. */
+  readonly expectedEmpty?: boolean;
+  /** Delete only while the thread is still a side chat. */
+  readonly expectedSideChat?: boolean;
+}
 export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
 export type SettleThreadInput = ThreadCommandInput;
@@ -127,6 +135,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly regenerateTitle?: boolean;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly expectedEmpty?: boolean;
+  /** `false` promotes a side chat to an ordinary thread. */
+  readonly sideChat?: boolean;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -209,14 +219,21 @@ export type StopThreadSessionInput = ThreadCommandInput;
 export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
-  readonly runId: RunId;
+  /** Omitted forks at the latest stable point, which a running source resolves to its last completed run. */
+  readonly runId?: RunId;
   readonly title?: string;
+  readonly sideChat?: boolean;
+  readonly runtimeMode?: RuntimeMode;
 }
 
 export interface MergeThreadBackInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly runId: RunId;
+}
+
+export interface ResumeThreadQueueInput extends ThreadCommandInput {
+  readonly runId?: RunId;
 }
 
 export interface ReorderQueuedRunInput extends ThreadCommandInput {
@@ -399,6 +416,8 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.parentThreadId === undefined ? {} : { parentThreadId: input.parentThreadId }),
+    ...(input.sideChat === undefined ? {} : { sideChat: input.sideChat }),
   });
 });
 
@@ -420,7 +439,17 @@ function simpleThreadCommand(
 export const deleteThread = Effect.fn("EnvironmentCommands.deleteThread")(function* (
   input: DeleteThreadInput,
 ) {
-  return yield* simpleThreadCommand("thread.delete", input);
+  if (input.expectedEmpty !== true && input.expectedSideChat !== true) {
+    return yield* simpleThreadCommand("thread.delete", input);
+  }
+  const commandId = yield* allocateCommandId(input);
+  return yield* dispatch({
+    type: "thread.delete",
+    commandId,
+    threadId: input.threadId,
+    ...(input.expectedEmpty === true ? { expectedEmpty: true } : {}),
+    ...(input.expectedSideChat === true ? { expectedSideChat: true } : {}),
+  });
 });
 
 export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (
@@ -560,6 +589,7 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.linkedPullRequest !== undefined ||
+      input.sideChat !== undefined ||
       input.limitRecovery !== undefined
     ) {
       result = yield* dispatch({
@@ -575,6 +605,7 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.sideChat === undefined ? {} : { sideChat: input.sideChat }),
       });
     }
     if (input.modelSelection !== undefined) {
@@ -769,19 +800,37 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,
 ) {
+  let threadId = input.threadId;
   if (input.subagentId !== undefined) {
     const projection = yield* getProjection(input.threadId);
     const subagent = projection.subagents.find((agent) => agent.id === input.subagentId);
-    if (subagent?.runId == null) return { sequence: 0 };
-    return yield* dispatch({
-      type: "subagent.stop",
-      commandId: yield* allocateCommandId(input),
-      threadId: input.threadId,
-      runId: subagent.runId,
-      subagentId: subagent.id,
-    });
+    if (subagent?.origin === "app_owned" && subagent.childThreadId !== null) {
+      // The parent ends the task even when its child lost track of it (#19002). Older
+      // servers reject this for app-owned tasks, so the child stop below still runs.
+      if (subagent.runId !== null) {
+        yield* dispatch({
+          type: "subagent.stop",
+          commandId: yield* allocateCommandId({}),
+          threadId: input.threadId,
+          runId: subagent.runId,
+          subagentId: subagent.id,
+        }).pipe(Effect.ignore);
+      }
+      threadId = subagent.childThreadId;
+    } else {
+      if (subagent?.runId == null) return { sequence: 0 };
+      return yield* dispatch({
+        type: "subagent.stop",
+        commandId: yield* allocateCommandId(input),
+        threadId: input.threadId,
+        runId: subagent.runId,
+        subagentId: subagent.id,
+      });
+    }
   }
-  let runId = input.runId ?? (input.turnId as RunId | undefined);
+  // A run named by the caller belongs to the parent, not the rerouted child.
+  let runId =
+    threadId === input.threadId ? (input.runId ?? (input.turnId as RunId | undefined)) : undefined;
   if (runId === undefined) {
     const config = yield* getInitialServerConfig();
     if (config.environment.capabilities.threadStop === true) {
@@ -789,12 +838,12 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
       return yield* dispatch({
         type: "thread.stop",
         commandId: yield* allocateCommandId(input),
-        threadId: input.threadId,
+        threadId,
       });
     }
   }
   if (runId === undefined) {
-    const projection = yield* getProjection(input.threadId);
+    const projection = yield* getProjection(threadId);
     runId = projection.runs.findLast(
       (run) =>
         run.status === "preparing" ||
@@ -823,7 +872,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         result = yield* dispatch({
           type: "thread.pull-request.watch",
           commandId: yield* allocateCommandId(result.sequence === 0 ? input : {}),
-          threadId: input.threadId,
+          threadId,
           host: link.host,
           repository: link.repository,
           number: link.number,
@@ -837,7 +886,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),
-    threadId: input.threadId,
+    threadId,
     runId,
     holdQueue: true,
   });
@@ -956,8 +1005,11 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     creationSource: input.creationSource ?? "web",
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
-    sourcePoint: { type: "run", runId: input.runId },
+    sourcePoint:
+      input.runId === undefined ? { type: "latest_stable" } : { type: "run", runId: input.runId },
     ...(input.title === undefined ? {} : { title: input.title }),
+    ...(input.sideChat === undefined ? {} : { sideChat: input.sideChat }),
+    ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
   });
 });
 
@@ -976,10 +1028,12 @@ export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(
 });
 
 export const resumeThreadQueue = Effect.fn("EnvironmentCommands.resumeThreadQueue")(function* (
-  input: ThreadCommandInput,
+  input: ResumeThreadQueueInput,
 ) {
   return yield* dispatch({
-    type: "queue.resume",
+    ...(input.runId === undefined
+      ? { type: "queue.resume" as const }
+      : { type: "queued-run.start" as const, runId: input.runId }),
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
   });

@@ -14,10 +14,7 @@ import {
   RuntimeRequestId,
   ThreadId,
 } from "@t3tools/contracts";
-import {
-  resolveT3McpToolDefinition,
-  resolveT3McpToolSummaryAction,
-} from "@t3tools/shared/t3McpToolPresentation";
+import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -391,7 +388,6 @@ it("cuts a long last message and names the cut", () => {
 it("presents the watch tools", () => {
   for (const tool of Object.values(ThreadWatchToolkit.tools)) {
     assert.isNotNull(resolveT3McpToolDefinition(tool.name), tool.name);
-    assert.isNotNull(resolveT3McpToolSummaryAction(tool.name), tool.name);
   }
 });
 

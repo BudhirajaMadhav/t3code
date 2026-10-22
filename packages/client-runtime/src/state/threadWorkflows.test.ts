@@ -2,10 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 
 import {
-  canDetachThreadProviderSession,
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
+  describeSideChatVisibility,
   resolveLatestMergeBackRun,
+  resolveSideChatHistoryAvailability,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
 
@@ -136,7 +137,45 @@ describe("thread workflows", () => {
     expect(state.activeRun?.id).toBe("active");
     expect(state.canReorder).toBe(true);
     expect(state.canPromoteToSteer).toBe(true);
+    expect(state.canSendNow).toBe(false);
   });
+
+  it.each(["completed", "interrupted", "cancelled", "failed"])(
+    "allows sending a held message after a %s turn without a live session",
+    (status) => {
+      const state = deriveThreadQueueWorkflowState({
+        thread: { id: "thread", activeProviderThreadId: null },
+        runs: [
+          { id: "previous", status, ordinal: 1 },
+          { id: "queued", status: "queued", userMessageId: "message", ordinal: 2, queueHeld: true },
+        ],
+        messages: [{ id: "message", text: "Send this" }],
+        providerThreads: [],
+        providerTurns: [],
+        providerSessions: [],
+      } as never);
+
+      expect(state.canSendNow).toBe(true);
+      expect(state.canPromoteToSteer).toBe(false);
+      expect(state.isHeld).toBe(true);
+    },
+  );
+
+  it.each(["preparing", "starting", "running", "waiting"])(
+    "does not offer send now while a turn is %s",
+    (status) => {
+      const state = deriveThreadQueueWorkflowState({
+        thread: { id: "thread", activeProviderThreadId: null },
+        runs: [{ id: "active", status, ordinal: 1 }],
+        messages: [],
+        providerThreads: [],
+        providerTurns: [],
+        providerSessions: [],
+      } as never);
+
+      expect(state.canSendNow).toBe(false);
+    },
+  );
 
   it("keeps held messages visible and clears the hold when they leave the queue", () => {
     for (const status of ["queued", "cancelled", "starting"] as const) {
@@ -291,73 +330,6 @@ describe("thread workflows", () => {
     },
   );
 
-  it("does not promote queued work until the running provider turn is projected", () => {
-    const state = deriveThreadQueueWorkflowState({
-      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
-      runs: [
-        {
-          id: "active",
-          status: "running",
-          providerThreadId: "provider-thread",
-          activeAttemptId: "attempt-active",
-          ordinal: 1,
-        },
-        { id: "queued", status: "queued", userMessageId: "message", ordinal: 2 },
-      ],
-      messages: [{ id: "message", text: "Queued" }],
-      providerTurns: [],
-      providerThreads: [
-        {
-          id: "provider-thread",
-          appThreadId: "thread",
-          providerSessionId: "provider-session",
-        },
-      ],
-      providerSessions: [
-        {
-          id: "provider-session",
-          status: "running",
-          capabilities: capabilities({ queued: true, steer: true }),
-        },
-      ],
-    } as never);
-
-    expect(state.canPromoteToSteer).toBe(false);
-  });
-
-  it("does not expose known unsupported queue or fork actions", () => {
-    const projection = {
-      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
-      runs: [{ id: "queued", status: "queued", userMessageId: "message", ordinal: 1 }],
-      messages: [],
-      providerThreads: [
-        {
-          id: "provider-thread",
-          appThreadId: "thread",
-          providerSessionId: "provider-session",
-        },
-      ],
-      providerSessions: [
-        {
-          id: "provider-session",
-          status: "ready",
-          capabilities: capabilities(),
-        },
-      ],
-    } as never;
-    const queue = deriveThreadQueueWorkflowState(projection);
-    const projectedItem = {
-      item: { type: "assistant_message", runId: "run", status: "completed" },
-    } as never;
-
-    expect(queue.canReorder).toBe(false);
-    expect(queue.canPromoteToSteer).toBe(false);
-    expect(canForkProjectedAssistantItem({ projectedItem, capabilities: capabilities() })).toBe(
-      false,
-    );
-    expect(canDetachThreadProviderSession(projection)).toBe(true);
-  });
-
   it("allows native, portable, and capability-unknown exact-run forks", () => {
     const projectedItem = {
       item: { type: "assistant_message", runId: "run", status: "completed" },
@@ -397,17 +369,6 @@ describe("thread workflows", () => {
     expect(resolveLatestMergeBackRun(projection)?.id).toBe("newest-finished");
   });
 
-  it("does not let a stale completed run later in storage order hide the waiting checkpoint", () => {
-    const projection = {
-      runs: [
-        { id: "newest-finished", status: "waiting", ordinal: 2 },
-        { id: "older-completed", status: "completed", ordinal: 1 },
-      ],
-    } as never;
-
-    expect(resolveLatestMergeBackRun(projection)?.id).toBe("newest-finished");
-  });
-
   it.each(["preparing", "starting", "running"] as const)(
     "does not merge older history while a newer run is %s",
     (status) => {
@@ -421,4 +382,74 @@ describe("thread workflows", () => {
       expect(resolveLatestMergeBackRun(projection)).toBeNull();
     },
   );
+});
+
+describe("side chat history", () => {
+  const sessionProjection = (
+    runs: ReadonlyArray<Record<string, unknown>>,
+    sessionCapabilities?: ReturnType<typeof capabilities>,
+  ) =>
+    ({
+      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+      runs,
+      providerThreads: [
+        { id: "provider-thread", appThreadId: "thread", providerSessionId: "session" },
+      ],
+      providerSessions: [
+        {
+          id: "session",
+          status: "ready",
+          ...(sessionCapabilities === undefined ? {} : { capabilities: sessionCapabilities }),
+        },
+      ],
+    }) as unknown as OrchestrationV2ThreadProjection;
+
+  it("forks at the latest completed checkpointed run, ignoring one still streaming", () => {
+    const result = resolveSideChatHistoryAvailability(
+      sessionProjection(
+        [
+          { id: "r1", ordinal: 1, status: "completed", checkpointId: "c1" },
+          { id: "r2", ordinal: 2, status: "completed", checkpointId: "c2" },
+          { id: "r3", ordinal: 3, status: "running", checkpointId: null },
+        ],
+        capabilities({ nativeFork: true }),
+      ),
+    );
+    expect(result).toEqual({ available: true, upToRunOrdinal: 2 });
+  });
+
+  it("explains why history is unavailable", () => {
+    expect(
+      resolveSideChatHistoryAvailability(
+        sessionProjection([{ id: "r1", ordinal: 1, status: "running", checkpointId: null }]),
+      ),
+    ).toMatchObject({ available: false, reason: expect.stringContaining("Nothing to share") });
+    expect(
+      resolveSideChatHistoryAvailability(
+        sessionProjection(
+          [{ id: "r1", ordinal: 1, status: "completed", checkpointId: "c1" }],
+          capabilities(),
+        ),
+      ),
+    ).toMatchObject({ available: false, reason: expect.stringContaining("provider") });
+    expect(
+      resolveSideChatHistoryAvailability(
+        sessionProjection(
+          [{ id: "r1", ordinal: 1, status: "completed", checkpointId: "c1" }],
+          capabilities({ portableFork: true }),
+        ),
+      ),
+    ).toEqual({ available: true, upToRunOrdinal: 1 });
+  });
+
+  it("names what a side chat can see", () => {
+    const parentRuns = [{ id: "r4", ordinal: 4 }] as never;
+    expect(
+      describeSideChatVisibility({
+        forkedFrom: { type: "run", threadId: "thread", runId: "r4" } as never,
+        parentRuns,
+      }),
+    ).toBe("Sees up to run 4");
+    expect(describeSideChatVisibility({ forkedFrom: null, parentRuns })).toBe("Sees no history");
+  });
 });

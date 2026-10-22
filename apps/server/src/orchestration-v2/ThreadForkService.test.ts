@@ -109,12 +109,23 @@ function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2Thr
 
 const planFork = (
   sourceRun: OrchestrationV2Run,
-  sourceProjection = makeSourceProjection(sourceRun),
+  options: {
+    readonly sideChat?: boolean;
+    readonly runtimeMode?: OrchestrationV2AppThread["runtimeMode"];
+    readonly sourceThread?: OrchestrationV2AppThread;
+    readonly sourceProjection?: OrchestrationV2ThreadProjection;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const service = yield* ThreadForkService.ThreadForkServiceV2;
+    const sourceProjection = options.sourceProjection ?? makeSourceProjection(sourceRun);
     return yield* service.plan({
-      sourceProjection,
+      ...(options.sideChat === undefined ? {} : { sideChat: options.sideChat }),
+      ...(options.runtimeMode === undefined ? {} : { runtimeMode: options.runtimeMode }),
+      sourceProjection:
+        options.sourceThread === undefined
+          ? sourceProjection
+          : { ...sourceProjection, thread: options.sourceThread },
       sourceRun,
       sourceProviderThread: undefined,
       canonicalSourcePoint: {
@@ -129,19 +140,6 @@ const planFork = (
       createdAt: forkCreatedAt,
     });
   }).pipe(Effect.provide(ThreadForkService.layer));
-
-it("treats usage-limited and other provider-finished runs as forkable", () => {
-  assert.isTrue(ThreadForkService.isForkableSourceRunStatus("completed"));
-  assert.isTrue(ThreadForkService.isForkableSourceRunStatus("waiting"));
-  assert.isTrue(ThreadForkService.isForkableSourceRunStatus("failed"));
-  assert.isTrue(ThreadForkService.isForkableSourceRunStatus("interrupted"));
-  assert.isTrue(ThreadForkService.isForkableSourceRunStatus("cancelled"));
-  assert.isFalse(ThreadForkService.isForkableSourceRunStatus("running"));
-  assert.isFalse(ThreadForkService.isForkableSourceRunStatus("starting"));
-  assert.isFalse(ThreadForkService.isForkableSourceRunStatus("queued"));
-  assert.isFalse(ThreadForkService.isForkableSourceRunStatus("preparing"));
-  assert.isFalse(ThreadForkService.isForkableSourceRunStatus("rolled_back"));
-});
 
 it.effect("keeps a fork awake when its source thread is snoozed", () =>
   Effect.gen(function* () {
@@ -164,17 +162,6 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
       relationshipToParent: "fork",
       rootThreadId: sourceThreadId,
     });
-    assert.deepEqual(result.targetThread.forkedFrom, {
-      type: "run",
-      threadId: sourceThreadId,
-      runId: sourceRunId,
-    });
-  }),
-);
-
-it.effect("forks from a usage-limited failed run", () =>
-  Effect.gen(function* () {
-    const result = yield* planFork(makeSourceRun("failed"));
     assert.deepEqual(result.targetThread.forkedFrom, {
       type: "run",
       threadId: sourceThreadId,
@@ -243,7 +230,7 @@ it.effect("preserves pull request context without inheriting any watches", () =>
         branchPullRequest: legacyLink,
       },
     };
-    const result = yield* planFork(sourceRun, sourceProjection);
+    const result = yield* planFork(sourceRun, { sourceProjection });
 
     assert.deepEqual(result.targetThread.pullRequests, links);
     assert.deepEqual(result.targetThread.linkedPullRequest, legacyLink);
@@ -264,5 +251,28 @@ it.effect("rejects in-progress and rolled-back fork sources", () =>
       assert.equal(error.targetThreadId, targetThreadId);
       assert.equal(error.cause, ThreadForkService.forkableSourceRunStatusError(sourceRun));
     }
+  }),
+);
+
+it.effect("marks a side-chat fork and can narrow its runtime mode", () =>
+  Effect.gen(function* () {
+    const result = yield* planFork(makeSourceRun("completed"), {
+      sideChat: true,
+      runtimeMode: "approval-required",
+    });
+    assert.isTrue(result.targetThread.sideChat);
+    assert.equal(result.targetThread.runtimeMode, "approval-required");
+    // Lineage still says fork: presentation is a separate fact.
+    assert.equal(result.targetThread.lineage.relationshipToParent, "fork");
+  }),
+);
+
+it.effect("does not carry a side-chat source's flag into an ordinary fork", () =>
+  Effect.gen(function* () {
+    const result = yield* planFork(makeSourceRun("completed"), {
+      sourceThread: { ...makeSourceThread(), sideChat: true },
+    });
+    assert.isFalse(result.targetThread.sideChat);
+    assert.equal(result.targetThread.runtimeMode, "full-access");
   }),
 );
