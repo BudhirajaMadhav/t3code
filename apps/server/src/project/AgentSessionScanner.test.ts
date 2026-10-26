@@ -1627,7 +1627,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           const worktree = path.join(repo, ".claude", "worktrees", "feature");
           const externalWorktree = yield* makeTempDir("t3code-workspace-feature-");
           const managedWorktree = path.join(configBaseDir, "worktrees", "repo", "managed");
-          const customDirectory = yield* makeTempDir("t3code-custom-worktrees-");
+          const customDirectory = yield* makeTempDir("t3code-custom-worktrees-").pipe(
+            Effect.flatMap((directory) => fileSystem.realPath(directory)),
+          );
           const previousDirectory = yield* makeTempDir("t3code-previous-worktrees-");
           const customWorktree = path.join(customDirectory, "repo", "custom");
           const previousWorktree = path.join(previousDirectory, "repo", "previous");
