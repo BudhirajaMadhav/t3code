@@ -72,7 +72,6 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   ThreadId,
-  type RunId,
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
@@ -646,10 +645,6 @@ export default function ChatView(props: ChatViewProps) {
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const branchToolbarRef = useRef<BranchToolbarHandle>(null);
-  const [restingComposerControlsHost, setRestingComposerControlsHost] =
-    useState<HTMLDivElement | null>(null);
-  const [restingComposerControlsVisible, setRestingComposerControlsVisible] = useState(false);
-
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [optimisticBlobPreviews] = useState(createOptimisticBlobPreviews);
   const [heldOptimisticUserMessages, setHeldOptimisticUserMessages] = useState(() =>
@@ -4048,6 +4043,7 @@ function SideChatPanel(props: {
     useEnvironmentShellStatus(parentRef.environmentId),
   );
   const gone = isSideChatTabGone({ live, shell });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes a restored side chat tab once the environment's live snapshot says the thread is gone
   useEffect(() => {
     closeSideChatTabIfGone(parentRef, threadId, { live, shell });
   }, [live, parentRef, shell, threadId]);
@@ -4055,6 +4051,7 @@ function SideChatPanel(props: {
   // parent's panel. What only its own panel can show, such as a browser it owns
   // or its turn diff, opens it as a full thread, where that panel renders.
   const navigate = useNavigate();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this side chat as an embedded panel host with the parent's right panel and unregisters on cleanup
   useEffect(
     () =>
       registerEmbeddedPanelHost(
