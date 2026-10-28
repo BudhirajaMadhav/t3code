@@ -63,6 +63,8 @@ export function composerCommandKeyHandler(input: {
   readonly setComposerTrigger: (trigger: ComposerTrigger | null) => void;
   readonly setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
   readonly dismissComposerTrigger: (trigger: ComposerTrigger | null) => void;
+  /** Escape with no composer menu open; return true when it was used. */
+  readonly onEscape: (() => boolean) | undefined;
   readonly toggleInteractionMode: () => void;
   readonly nudgeComposerMenuHighlight: (key: "ArrowDown" | "ArrowUp") => void;
   readonly onSelectComposerItem: (item: ComposerCommandItem) => void;
@@ -109,6 +111,7 @@ export function composerCommandKeyHandler(input: {
     setComposerTrigger,
     setComposerHighlightedItemId,
     dismissComposerTrigger,
+    onEscape,
     toggleInteractionMode,
     nudgeComposerMenuHighlight,
     onSelectComposerItem,
@@ -191,7 +194,8 @@ export function composerCommandKeyHandler(input: {
     const menuIsActive =
       !isLiteralPendingAnswer && (composerMenuOpenRef.current || trigger !== null);
     if (key === "Escape") {
-      if (!menuIsActive || event.isComposing || event.keyCode === 229) return false;
+      if (event.isComposing || event.keyCode === 229) return false;
+      if (!menuIsActive) return onEscape?.() ?? false;
       dismissComposerTrigger(trigger);
       composerMenuOpenRef.current = false;
       return true;

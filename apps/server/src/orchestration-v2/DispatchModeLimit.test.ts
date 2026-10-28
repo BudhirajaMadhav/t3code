@@ -133,6 +133,15 @@ it.layer(layerTest)("DispatchModeLimit", (it) => {
         .dispatch(fork)
         .pipe(Effect.provideService(DispatchModeLimit, supervised), Effect.flip);
       assert.equal(retried._tag, "OrchestratorDispatchError");
+      const override = yield* orchestrator
+        .dispatch({
+          ...fork,
+          commandId: CommandId.make("fork-mode-override"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.provideService(DispatchModeLimit, supervised), Effect.flip);
+      assert.equal(override._tag, "OrchestratorThreadAboveModeLimitError");
+      assert.isNull(yield* projections.getThreadShell(targetThreadId));
     }),
   );
 });

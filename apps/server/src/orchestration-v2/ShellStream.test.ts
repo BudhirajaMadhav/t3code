@@ -192,6 +192,26 @@ describe("omitIdleSubagentShells", () => {
     ]);
   });
 
+  it("keeps an idle child that parents a side chat, so the side chat stays out of lists", () => {
+    const threads = [
+      row("root", null),
+      row("idle", "root"),
+      row("side", "idle", {
+        sideChat: true,
+        lineage: {
+          parentThreadId: ThreadId.make("idle"),
+          relationshipToParent: "fork",
+          rootThreadId: ThreadId.make("root"),
+        },
+      }),
+    ];
+    expect(omitIdleSubagentShells(threads).map((thread) => thread.id)).toEqual([
+      "root",
+      "idle",
+      "side",
+    ]);
+  });
+
   it("still filters the transcript events of omitted children for a subscriber that opts in", () => {
     const threads = [row("root", null), row("idle", "root")];
     const omitted = activeShellRowsForSubscriber(threads, true);
@@ -289,6 +309,21 @@ describe("omitOlderSettledShells", () => {
       "child",
     ]);
     expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 4 }]);
+  });
+
+  it("keeps side chats, however old, and the older parent above one, without counting them", () => {
+    const sideChat = (id: string, parent: string) =>
+      row(id, 60, {
+        sideChat: true,
+        lineage: {
+          parentThreadId: ThreadId.make(parent),
+          relationshipToParent: "fork",
+          rootThreadId: ThreadId.make(parent),
+        },
+      });
+    const result = omit([...newest, row("parent", 30), sideChat("side", "parent"), row("old", 30)]);
+    expect(result.threads.map((thread) => thread.id).slice(25)).toEqual(["parent", "side"]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
   });
 });
 

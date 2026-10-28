@@ -4,7 +4,7 @@ import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thr
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
-import { GitForkIcon } from "lucide-react";
+import { GitForkIcon, MessageCircleQuestionIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
@@ -95,30 +95,65 @@ function AssistantForkButton({
   const onForkFromRun = ctx.onForkFromRun;
   if (!canFork || onForkFromRun === undefined || projectedItem.item.runId === null) return null;
   const runId = projectedItem.item.runId;
+  const fork = () => {
+    setBusy(true);
+    void onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId }).finally(() =>
+      setBusy(false),
+    );
+  };
+  // A side chat hangs off this thread, so only this thread's own responses can
+  // seed one. Inherited ones (from before a fork) keep the plain fork button.
+  const onAskAboutResponse =
+    projectedItem.sourceThreadId === ctx.threadRef?.threadId ? ctx.onAskAboutResponse : undefined;
+  const ask = () => {
+    if (!onAskAboutResponse) return;
+    setBusy(true);
+    void onAskAboutResponse({ sourceThreadId: projectedItem.sourceThreadId, runId }).finally(() =>
+      setBusy(false),
+    );
+  };
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              void onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId }).finally(
-                () => setBusy(false),
-              );
-            }}
-            aria-label="Fork from this response"
-          />
-        }
-      >
-        <GitForkIcon className={cn("size-3", busy && "animate-pulse")} />
-      </TooltipTrigger>
-      <TooltipPopup side="top">Fork from this response</TooltipPopup>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={busy}
+              onClick={fork}
+              aria-label="Fork from this response"
+            />
+          }
+        >
+          <GitForkIcon className={cn("size-3", busy && "animate-pulse")} />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Fork from this response</TooltipPopup>
+      </Tooltip>
+      {onAskAboutResponse ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                disabled={busy || ctx.askAboutResponseDisabledReason !== null}
+                onClick={ask}
+                aria-label="Ask about this response"
+              />
+            }
+          >
+            <MessageCircleQuestionIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {ctx.askAboutResponseDisabledReason ?? "Ask about this response"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+    </>
   );
 }
 

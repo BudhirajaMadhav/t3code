@@ -72,15 +72,18 @@ export function buildActiveShellSnapshot(input: {
 
 /**
  * Idle subagent children have no sidebar row, so clients that opt in read them from their thread
- * family instead. A child stays while it is live or the parent of another child, so the request
- * and working walks over shell rows never meet a gap in a nested chain.
+ * family instead. A child stays while it is live or the parent of another child or a side chat, so
+ * walks over shell rows never meet a gap and a side chat's parent is never taken for gone.
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   const parentIds = new Set<string>();
   for (const thread of threads) {
-    if (thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId) {
+    if (
+      (thread.lineage.relationshipToParent === "subagent" || thread.sideChat === true) &&
+      thread.lineage.parentThreadId
+    ) {
       parentIds.add(thread.lineage.parentThreadId);
     }
   }
@@ -132,6 +135,7 @@ export function omitOlderSettledShells(input: {
   const settledTimes = input.threads
     .flatMap((thread) =>
       thread.lineage.relationshipToParent !== "subagent" &&
+      thread.sideChat !== true &&
       thread.settledOverride === "settled" &&
       thread.settledAt !== null
         ? [DateTime.toEpochMillis(thread.settledAt)]
@@ -142,6 +146,10 @@ export function omitOlderSettledShells(input: {
   const beforeMs = settledTimes[NEWEST_SETTLED_KEPT - 1] ?? settledTimes.at(-1) ?? nowMs;
   const ancestorIds = new Set<string>();
   for (const thread of input.threads) {
+    // A side chat is never older settled, and its parent stays so clients keep it out of lists.
+    if (thread.sideChat === true && thread.lineage.parentThreadId !== null) {
+      ancestorIds.add(thread.lineage.parentThreadId);
+    }
     if (thread.lineage.relationshipToParent !== "subagent") continue;
     if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
     ancestorIds.add(thread.lineage.rootThreadId);

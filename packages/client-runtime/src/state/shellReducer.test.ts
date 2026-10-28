@@ -27,6 +27,26 @@ const otherIdentity = {
 };
 
 describe("applyShellStreamEvent", () => {
+  it("restores an omitted parent atomically with its new side chat", () => {
+    const child = {
+      ...v2ThreadShell,
+      id: ThreadId.make("child"),
+      sideChat: true,
+      lineage: { ...v2ThreadShell.lineage, parentThreadId: v2ThreadShell.id },
+    };
+    const next = applyShellStreamEvent(
+      { ...v2ShellSnapshot, threads: [] },
+      {
+        kind: "thread.updated",
+        sequence: 1,
+        location: "active",
+        thread: child,
+        parentThread: v2ThreadShell,
+      },
+    );
+    expect(next.threads.map((thread) => thread.id)).toEqual([v2ThreadShell.id, child.id]);
+    expect(next.snapshotSequence).toBe(1);
+  });
   it("ignores stale project updates without mutating the snapshot", () => {
     const snapshotWithProject = {
       ...v2ShellSnapshot,

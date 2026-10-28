@@ -451,6 +451,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+  /**
+   * Presentation, not lineage: open in the right panel, stay out of the sidebar,
+   * discard on close while empty. How the thread relates to its parent stays in `lineage`.
+   */
+  sideChat: Schema.optional(Schema.Boolean),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -2034,6 +2039,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /**
+   * Presentation, not lineage: open in the right panel, stay out of the sidebar,
+   * discard on close while empty. How the thread relates to its parent stays in `lineage`.
+   */
+  sideChat: Schema.optional(Schema.Boolean),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2128,15 +2138,17 @@ export function isLiveSubagentShell(
 }
 
 /**
- * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
- * count every such thread, so the server and clients share this one rule.
+ * A settled top-level thread, not a side chat, settled before `beforeMs`. Shells that omit older
+ * settled threads count every such thread, so the server and clients share this one rule.
  */
 export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
+  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt"> &
+    Partial<Pick<OrchestrationV2ThreadShell, "sideChat">>,
   beforeMs: number,
 ): boolean {
   return (
     thread.lineage.relationshipToParent !== "subagent" &&
+    thread.sideChat !== true &&
     thread.settledOverride === "settled" &&
     thread.settledAt !== null &&
     DateTime.toEpochMillis(thread.settledAt) < beforeMs
@@ -2200,6 +2212,7 @@ export const OrchestrationV2ShellStreamItem = Schema.Union([
     sequence: NonNegativeInt,
     location: Schema.Literals(["active", "archive"]),
     thread: OrchestrationV2ThreadShell,
+    parentThread: Schema.optionalKey(OrchestrationV2ThreadShell),
   }),
   Schema.Struct({
     kind: Schema.Literal("thread.removed"),
@@ -2866,6 +2879,12 @@ export const OrchestrationV2Command = Schema.Union([
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+    /**
+     * Link the new thread under an existing one without transferring any
+     * context: lineage records the parent but no relationship kind.
+     */
+    parentThreadId: Schema.optional(ThreadId),
+    sideChat: Schema.optional(Schema.Boolean),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({
@@ -2902,6 +2921,10 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
     threadId: ThreadId,
+    /** Delete only while no message or run has landed on the thread. */
+    expectedEmpty: Schema.optional(Schema.Boolean),
+    /** Delete only while the thread is still a side chat; a promoted one stays. */
+    expectedSideChat: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.settle"),
@@ -2994,6 +3017,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Promote (false) a side chat to an ordinary thread, or mark one; absent leaves it unchanged. */
+    sideChat: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -3241,6 +3266,9 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
+    sideChat: Schema.optional(Schema.Boolean),
+    /** Overrides the runtime mode the fork would otherwise copy from its source. */
+    runtimeMode: Schema.optional(RuntimeMode),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({
@@ -3822,6 +3850,19 @@ export const OrchestrationV2ThreadStreamItem = withRecordIdTable(
 );
 export type OrchestrationV2ThreadStreamItem = typeof OrchestrationV2ThreadStreamItem.Type;
 
+/**
+ * Why a command was refused, where a client acts on it. A delete sent with
+ * `expectedEmpty` found messages or runs (`thread_not_empty`), or one sent with
+ * `expectedSideChat` found the thread promoted (`thread_not_side_chat`), so the
+ * thread stays.
+ */
+export const OrchestrationV2DispatchRejectionReason = Schema.Literals([
+  "thread_not_empty",
+  "thread_not_side_chat",
+]);
+export type OrchestrationV2DispatchRejectionReason =
+  typeof OrchestrationV2DispatchRejectionReason.Type;
+
 export class OrchestrationV2DispatchCommandError extends Schema.TaggedError<OrchestrationV2DispatchCommandError>()(
   "OrchestrationV2DispatchCommandError",
   {
@@ -3829,6 +3870,7 @@ export class OrchestrationV2DispatchCommandError extends Schema.TaggedError<Orch
     commandType: Schema.String,
     message: Schema.String,
     detail: Schema.optional(Schema.String),
+    reason: Schema.optional(OrchestrationV2DispatchRejectionReason),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}

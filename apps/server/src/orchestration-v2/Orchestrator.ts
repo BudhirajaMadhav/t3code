@@ -186,6 +186,26 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
   }
 }
 
+/** A conditional delete ("discard if empty") found a message or a run on the thread. */
+export class OrchestratorThreadNotEmptyError extends Schema.TaggedError<OrchestratorThreadNotEmptyError>()(
+  "OrchestratorThreadNotEmptyError",
+  { commandId: CommandId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} is no longer empty.`;
+  }
+}
+
+/** A conditional delete for a side chat found the thread promoted to an ordinary one. */
+export class OrchestratorThreadNotSideChatError extends Schema.TaggedError<OrchestratorThreadNotSideChatError>()(
+  "OrchestratorThreadNotSideChatError",
+  { commandId: CommandId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} is no longer a side chat.`;
+  }
+}
+
 export class OrchestratorThreadAlreadyExistsError extends Schema.TaggedError<OrchestratorThreadAlreadyExistsError>()(
   "OrchestratorThreadAlreadyExistsError",
   { commandId: CommandId, threadId: ThreadId },
@@ -296,6 +316,8 @@ export class OrchestratorCommandIdConflictError extends Schema.TaggedError<Orche
 export const OrchestratorV2Error = Schema.Union([
   OrchestratorDispatchError,
   OrchestratorThreadAlreadyExistsError,
+  OrchestratorThreadNotEmptyError,
+  OrchestratorThreadNotSideChatError,
   OrchestratorCommandRejectedError,
   OrchestratorProjectionError,
   OrchestratorDomainEventStreamError,
@@ -2508,6 +2530,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
+    // A linked thread records its parent but transfers no context, so the
+    // relationship stays null instead of claiming a fork.
+    const parentThread =
+      command.parentThreadId === undefined
+        ? null
+        : yield* projectionStore.getThread(command.parentThreadId).pipe(
+            Effect.mapError((cause) =>
+              cause._tag === "ProjectionStoreThreadNotFoundError"
+                ? new OrchestratorDispatchError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    cause: `Parent thread ${command.parentThreadId} does not exist.`,
+                  })
+                : new OrchestratorProjectionError({ threadId: command.parentThreadId!, cause }),
+            ),
+          );
+    if (
+      parentThread !== null &&
+      (parentThread.deletedAt !== null || parentThread.projectId !== command.projectId)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Parent thread ${parentThread.id} is deleted or belongs to another project.`,
+      });
+    }
+
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
@@ -2523,6 +2572,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       branch: command.branch,
       worktreePath: command.worktreePath,
       activeProviderThreadId: null,
+      ...(command.sideChat === undefined ? {} : { sideChat: command.sideChat }),
       pullRequests: [],
       ...(command.linkOrigin === undefined ? {} : { linkOrigin: command.linkOrigin }),
       // Only stamped work names a remote parent, so a client cannot claim one.
@@ -2530,9 +2580,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
       lineage: {
-        parentThreadId: null,
+        parentThreadId: parentThread?.id ?? null,
         relationshipToParent: null,
-        rootThreadId: command.threadId,
+        rootThreadId: parentThread?.lineage.rootThreadId ?? command.threadId,
       },
       forkedFrom: null,
       createdAt: now,
@@ -3359,6 +3409,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.sideChat === undefined ? {} : { sideChat: command.sideChat }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
@@ -4042,6 +4093,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // The source is unlocked; validate the modes copied here, not an earlier read.
     yield* refuseAboveDispatchModeLimit(command, command.sourceThreadId, sourceProjection.thread);
 
+    yield* refuseAboveDispatchModeLimit(command, command.targetThreadId, {
+      runtimeMode: command.runtimeMode ?? sourceProjection.thread.runtimeMode,
+      interactionMode: sourceProjection.thread.interactionMode,
+    });
+
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
 
     if (sourceRun === null) {
@@ -4078,6 +4134,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         transferId,
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
+        ...(command.sideChat === undefined ? {} : { sideChat: command.sideChat }),
+        ...(command.runtimeMode === undefined ? {} : { runtimeMode: command.runtimeMode }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -4133,7 +4191,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // The source is unlocked; validate the modes copied here, not an earlier read.
     yield* refuseAboveDispatchModeLimit(command, command.sourceThreadId, sourceProjection.thread);
     const targetProjection = yield* projectionStore
-      .getThreadRecords(command.targetThreadId, ["contextTransfers"])
+      .getThreadRecords(command.targetThreadId, ["contextTransfers", "runs"])
       .pipe(
         Effect.mapError(
           (cause) =>
@@ -4143,6 +4201,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+
+    if (targetProjection.runs.some(isBlockingRun)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Wait for the main thread to finish before bringing back a side chat.",
+      });
+    }
+    if (
+      pendingMergeBackTransfersForThread(targetProjection).some(
+        (transfer) => transfer.sourceThreadId !== command.sourceThreadId,
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause:
+          "Send a message in the main thread to use its pending merge before bringing back another side chat.",
+      });
+    }
 
     if (
       sourceProjection.thread.lineage.relationshipToParent !== "fork" ||
@@ -12437,6 +12515,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
+        // Decided under the thread's command lock, so a promotion or a message
+        // that already landed always wins over "discard if empty".
+        if (command.expectedSideChat === true && projection.thread.sideChat !== true) {
+          return yield* new OrchestratorThreadNotSideChatError({
+            commandId: command.commandId,
+            threadId: command.threadId,
+          });
+        }
+        if (command.expectedEmpty === true) {
+          const messageCount = yield* projectionStore
+            .getMessageCount(command.threadId)
+            .pipe(mapDispatchError(command));
+          if (messageCount > 0 || projection.runs.length > 0) {
+            return yield* new OrchestratorThreadNotEmptyError({
+              commandId: command.commandId,
+              threadId: command.threadId,
+            });
+          }
+        }
         return yield* mapDispatchError(command)(
           planThreadDeletion({
             command,

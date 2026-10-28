@@ -158,11 +158,19 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     case "thread.updated": {
+      const threads =
+        event.parentThread === undefined
+          ? snapshot.threads
+          : upsertById(snapshot.threads, event.parentThread);
       const existing =
         event.location === "active"
           ? snapshot.threads.find((thread) => thread.id === event.thread.id)
           : undefined;
-      if (existing !== undefined && sameThreadShell(existing, event.thread)) {
+      if (
+        event.parentThread === undefined &&
+        existing !== undefined &&
+        sameThreadShell(existing, event.thread)
+      ) {
         return { ...snapshot, snapshotSequence: event.sequence };
       }
       const withoutThread = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
@@ -170,9 +178,7 @@ export function applyShellStreamEvent(
       return {
         ...snapshot,
         threads:
-          event.location === "active"
-            ? upsertById(snapshot.threads, event.thread)
-            : withoutThread(snapshot.threads),
+          event.location === "active" ? upsertById(threads, event.thread) : withoutThread(threads),
         // The archive has its own bounded query/subscription. Older servers may
         // still send archive-located deltas here; remove them from the normal
         // shell instead of growing its persisted cache again.

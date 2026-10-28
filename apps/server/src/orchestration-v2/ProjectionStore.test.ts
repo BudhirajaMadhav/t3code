@@ -1262,6 +1262,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
       readonly settledDay: number | null;
       readonly project?: string;
       readonly subagent?: boolean;
+      readonly sideChat?: boolean;
       readonly archived?: boolean;
       readonly snoozedUntilDay?: number;
     }) =>
@@ -1283,6 +1284,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
           branch: null,
           worktreePath: null,
           activeProviderThreadId: null,
+          ...(input.sideChat === true ? { sideChat: true } : {}),
           lineage: {
             parentThreadId: input.subagent === true ? id("b") : null,
             relationshipToParent: input.subagent === true ? "subagent" : null,
@@ -1307,6 +1309,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
     yield* createThread({ name: "recent", settledDay: 20 });
     yield* createThread({ name: "unsettled", settledDay: null });
     yield* createThread({ name: "child", settledDay: 1, subagent: true });
+    yield* createThread({ name: "side-chat", settledDay: 1, sideChat: true });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
 
     const list = (

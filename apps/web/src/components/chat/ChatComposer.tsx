@@ -368,6 +368,10 @@ export interface ChatComposerProps {
   activeThreadShell: ThreadShell | null;
   promptHistoryMessages: ReadonlyArray<ChatMessage>;
   forceExpandedOnMobile: boolean;
+  /** Replaces the default placeholder when nothing else is asked of the user. */
+  idlePlaceholder?: string;
+  /** Escape with no composer menu open; return true when it was used. */
+  onEscape?: () => boolean;
   projectSelectionRequired: boolean;
 
   phase: SessionPhase;
@@ -384,6 +388,11 @@ export interface ChatComposerProps {
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   onUsageLimitsCommand?: (() => void) | undefined;
+  /**
+   * Starts (or, with no question, reopens) a side chat. Absent when the thread
+   * cannot have one, which also hides `/side` and `/btw` from the slash menu.
+   */
+  onSideChatCommand?: ((question: string) => Promise<unknown>) | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -520,6 +529,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThread,
     promptHistoryMessages,
     forceExpandedOnMobile,
+    idlePlaceholder,
+    onEscape,
     projectSelectionRequired,
     phase,
     canInterrupt,
@@ -1108,6 +1119,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerPreviewAnnotations.length === 0 &&
     composerReviewComments.length === 0;
   const linkedEnvironments = useLinkedEnvironments(environmentId);
+  // Mirrors ChatView's typed `/side` check: only a leading command on a
+  // prompt-only draft, outside an agent question or a queued-message edit.
+  const sideCommandsRunnable =
+    !composerDraftHasUserContent({ ...composerDraft, prompt: "" }) &&
+    activePendingProgress === null &&
+    !isEditingQueuedMessage;
   const {
     items: composerMenuItems,
     isLoading: isComposerMenuLoading,
@@ -1122,6 +1139,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pullRequestRepository,
     threadPullRequests,
     planModeUiEnabled,
+    sideCommandsAvailable: props.onSideChatCommand !== undefined && sideCommandsRunnable,
     compactSlashCommandAvailable,
     selectedProvider,
     selectedProviderSkills,
@@ -1833,7 +1851,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
-  const { onUsageLimitsCommand } = props;
+  const { onUsageLimitsCommand, onSideChatCommand } = props;
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
     composerSelectLockRef.current = true;
@@ -1859,6 +1877,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
+      if ((item.command === "side" || item.command === "btw") && onSideChatCommand) {
+        // The menu hides these unless they can run, but a stale item can still be
+        // picked after the draft changes. Then keep the command as plain text.
+        if (trigger.rangeStart !== 0 || !sideCommandsRunnable) {
+          const replacement = `/${item.command} `;
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) setComposerHighlightedItemId(null);
+          return;
+        }
+        // `/btw` waits for a question; `/side` opens right away.
+        const opensNow = item.command === "side";
+        const replacement = opensNow ? "" : "/btw ";
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          focusEditorAfterReplace: !opensNow,
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          if (opensNow) void onSideChatCommand("");
+        }
+        return;
+      }
       if (item.command === "model") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2207,6 +2257,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerTrigger,
       setComposerHighlightedItemId,
       dismissComposerTrigger,
+      onEscape,
       toggleInteractionMode,
       nudgeComposerMenuHighlight,
       onSelectComposerItem,
@@ -2246,6 +2297,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     attachmentTargetKey,
     isComposerDraftTargetOpen: (key) => composerDraftTargetKeyRef.current === key,
     composerEditorRef,
+    composerFormRef,
     isRevertingCheckpoint: () => isRevertingCheckpointRef.current,
     pendingThreadImportsRef,
     setComposerCursor,
@@ -3377,7 +3429,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               ? "Choose a project above to start a thread"
                               : showProviderUnavailable
                                 ? "Enable a provider in Settings to send a message"
-                                : DEFAULT_COMPOSER_PLACEHOLDER
+                                : (idlePlaceholder ?? DEFAULT_COMPOSER_PLACEHOLDER)
                     }
                     disabled={
                       projectSelectionRequired ||

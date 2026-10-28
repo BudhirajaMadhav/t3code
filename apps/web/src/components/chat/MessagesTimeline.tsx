@@ -217,6 +217,8 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  /** Ask a selection in a side chat. Offered next to Cite when set. */
+  onAskAssistantText?: (citation: AssistantCitation) => boolean;
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
@@ -263,6 +265,13 @@ interface MessagesTimelineProps {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
   }) => Promise<void>;
+  /** Present when side chats are available: "Ask about this response" in the fork menu. */
+  onAskAboutResponse?: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly runId: RunId;
+  }) => Promise<void>;
+  /** Why "Ask about this response" cannot share history yet; null when it can. */
+  askAboutResponseDisabledReason?: string | null;
   supportsConversationRollback: boolean;
   threadStartCheckpointReady?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
@@ -325,6 +334,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onAskAssistantText,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
@@ -362,6 +372,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
+  onAskAboutResponse,
+  askAboutResponseDisabledReason = null,
   supportsConversationRollback,
   threadStartCheckpointReady = false,
   availableRevertTurnCounts,
@@ -1033,6 +1045,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     turnItemSource,
     workflowOpening,
     onForkFromRun,
+    onAskAboutResponse,
+    askAboutResponseDisabledReason,
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
@@ -1296,6 +1310,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 viewport={timelineViewportElement}
                 threadRef={citationThreadRef}
                 onCite={onCiteAssistantText}
+                {...(onAskAssistantText ? { onAsk: onAskAssistantText } : {})}
               />
             ) : null}
             <LegendList<MessagesTimelineRow>

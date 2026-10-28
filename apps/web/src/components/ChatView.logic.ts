@@ -389,6 +389,40 @@ export function resetHeldThreadTimeline(): void {
   rememberedThreadTimelineOrder = [];
 }
 
+// An embedded side chat opens its turn diff by navigating to itself as a full
+// thread. The view that mounts there is a different instance, so the explicit
+// open crosses over here instead of resetting to the branch diff.
+let pendingExplicitDiffOpenKey: string | null = null;
+
+export function markExplicitDiffOpenAcrossNavigation(threadKey: string): void {
+  pendingExplicitDiffOpenKey = threadKey;
+}
+
+/** True once for the thread marked above; any read clears the mark. */
+export function takeExplicitDiffOpenAcrossNavigation(threadKey: string | null): boolean {
+  const pending = pendingExplicitDiffOpenKey;
+  pendingExplicitDiffOpenKey = null;
+  return pending !== null && pending === threadKey;
+}
+
+export function threadKeysShareEnvironment(left: string | null, right: string | null): boolean {
+  if (left === null || right === null) {
+    return false;
+  }
+  const leftRef = parseScopedThreadKey(left);
+  const rightRef = parseScopedThreadKey(right);
+  return leftRef !== null && rightRef !== null && leftRef.environmentId === rightRef.environmentId;
+}
+
+export function isPaintOnlyThreadTimeline(
+  displayThreadKey: string | null,
+  activeThreadKey: string | null,
+): boolean {
+  return (
+    displayThreadKey !== null && activeThreadKey !== null && displayThreadKey !== activeThreadKey
+  );
+}
+
 export function resolveThreadSwitchTimeline<T extends readonly unknown[]>(input: {
   loading: boolean;
   activeThreadKey: string | null;
