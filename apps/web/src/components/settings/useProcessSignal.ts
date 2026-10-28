@@ -9,17 +9,14 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
-
-function processIdentityKey(process: ResourceTelemetryProcess): string {
-  return `${process.identity.pid}:${process.identity.startTimeMs}`;
-}
+import { processIdentityKey } from "./ResourceTelemetryDiagnostics.logic";
 
 /** The server signals only backend descendants; see `ProcessDiagnostics.signal`. */
 export function canSignalProcess(process: ResourceTelemetryProcess): boolean {
@@ -37,16 +34,9 @@ export function useProcessSignal(environmentId: EnvironmentId | null) {
   });
   const [signalingKeys, setSignalingKeys] = useState<ReadonlySet<string>>(() => new Set());
   const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
-  const environmentIdRef = useRef(environmentId);
-  useEffect(() => {
-    environmentIdRef.current = environmentId;
-    return () => {
-      environmentIdRef.current = null;
-    };
-  }, [environmentId]);
 
   const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
-    const targetEnvironmentId = environmentIdRef.current;
+    const targetEnvironmentId = environmentId;
     if (
       targetEnvironmentId === null ||
       !readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)
@@ -85,10 +75,7 @@ export function useProcessSignal(environmentId: EnvironmentId | null) {
         return;
       }
     }
-    if (
-      environmentIdRef.current !== targetEnvironmentId ||
-      !readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)
-    ) {
+    if (!readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)) {
       clearSignaling();
       return;
     }
