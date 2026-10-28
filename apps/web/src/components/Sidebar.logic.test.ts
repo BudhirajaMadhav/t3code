@@ -191,17 +191,19 @@ describe("sidebar thread lineage helpers", () => {
     });
 
     expect(
-      filterSidebarV2VisibleThreads([ordinary, forkedSideChat, linkedSideChat], null).map(
-        (thread) => thread.id,
-      ),
+      filterSidebarV2VisibleThreads(
+        [ordinary, forkedSideChat, linkedSideChat],
+        null,
+        new Set(),
+      ).map((thread) => thread.id),
     ).toEqual([parentId]);
     // Promoting clears the flag, and the thread joins the sidebar.
     expect(
-      filterSidebarV2VisibleThreads([{ ...forkedSideChat, sideChat: false }], null),
+      filterSidebarV2VisibleThreads([{ ...forkedSideChat, sideChat: false }], null, new Set()),
     ).toHaveLength(1);
     // With the parent deleted there is nowhere else to reach it, so it is listed.
     expect(
-      filterSidebarV2VisibleThreads([forkedSideChat, linkedSideChat], null).map(
+      filterSidebarV2VisibleThreads([forkedSideChat, linkedSideChat], null, new Set()).map(
         (thread) => thread.id,
       ),
     ).toEqual([forkedSideChat.id, linkedSideChat.id]);

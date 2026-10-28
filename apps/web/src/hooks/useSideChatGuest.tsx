@@ -54,7 +54,7 @@ export function useSideChatGuest(input: {
   // The composer remounts when it moves between the parent's slot and the panel
   // (maximizing), so it takes the keyboard on every move, not just on focus.
   const composerPlace = !focused ? null : sideChat?.composerSlot ? "slot" : "panel";
-  // oxlint-disable-next-line t3code/react-effect-budget -- Focus follows the composer when its DOM moves between panels.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Focus follows the composer when its DOM moves between panels.
   useEffect(() => {
     if (composerPlace === null) return;
     const frame = requestAnimationFrame(() => composerRef.current?.focusAtEnd());
@@ -64,7 +64,7 @@ export function useSideChatGuest(input: {
   // Escape goes back to main even after focus leaves the composer. This listens
   // in the bubble phase, after the editor, menus and dialogs claim their own
   // Escape, and leaves fields that use Escape themselves alone.
-  // oxlint-disable-next-line t3code/react-effect-budget -- Listen for Escape outside the editor while the side chat owns the composer.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Listen for Escape outside the editor while the side chat owns the composer.
   useEffect(() => {
     if (!focused || parentKey === null) return;
     const onKeyDown = (event: KeyboardEvent) => {

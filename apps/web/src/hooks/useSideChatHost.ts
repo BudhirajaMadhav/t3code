@@ -39,7 +39,7 @@ export function useSideChatHost(input: {
 
   // Back from a side chat, this thread's composer takes the keyboard again.
   const hadFocusedSideChat = useRef(false);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Restore DOM focus when the side chat returns the composer.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore DOM focus when the side chat returns the composer.
   useEffect(() => {
     if (focusedSideChatId === null && hadFocusedSideChat.current) {
       composerRef.current?.focusAtEnd();
