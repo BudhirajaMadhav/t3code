@@ -205,7 +205,7 @@ import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
 import { readPromptUltrathink } from "./TraitsPicker";
-import { ComposerContextControl, type ComposerContextData } from "./ComposerContextControl";
+import type { ComposerContextData } from "./ComposerContextControl";
 import {
   providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,

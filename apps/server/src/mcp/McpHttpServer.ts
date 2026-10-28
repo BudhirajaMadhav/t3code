@@ -1096,10 +1096,7 @@ export const layerOrchestratorToolkit = toolkitRegistration(
 
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
-export const layerThreadWatchToolkit = toolkitRegistration(
-  ThreadWatchToolkit,
-  ThreadWatchHandlers.layer,
-);
+const layerThreadWatchToolkit = toolkitRegistration(ThreadWatchToolkit, ThreadWatchHandlers.layer);
 
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,

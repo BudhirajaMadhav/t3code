@@ -324,7 +324,7 @@ function BreakdownSection(props: {
   const read = useStableCallback(useAtomCommand(readContextBreakdown, { reportFailure: false }));
   const [state, setState] = useState<BreakdownState>({ status: "loading" });
   const { environmentId, threadId } = props;
-  // Asked once per opening: the popup unmounts when it closes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the live session's context breakdown over RPC once per opening; the popup unmounts when it closes
   useEffect(() => {
     let current = true;
     void read({ environmentId, input: { threadId } }).then((result) => {

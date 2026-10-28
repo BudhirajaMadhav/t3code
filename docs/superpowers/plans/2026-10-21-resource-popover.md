@@ -33,13 +33,13 @@ Branch: `custom/resource-popover`.
 
 Per provider:
 
-| Provider | Decision |
-| --- | --- |
-| Claude, Codex | Attributed (one CLI / app-server per thread session; subagents share it). |
-| Terminals | Attributed. Terminals opened outside a real thread show as "Unknown thread". |
-| OpenCode | Not attributed: one shared server serves every thread. Shows under App. |
+| Provider                                            | Decision                                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude, Codex                                       | Attributed (one CLI / app-server per thread session; subagents share it).                                                            |
+| Terminals                                           | Attributed. Terminals opened outside a real thread show as "Unknown thread".                                                         |
+| OpenCode                                            | Not attributed: one shared server serves every thread. Shows under App.                                                              |
 | ACP (Cursor, Grok, Antigravity, registry), Pi, Muse | Not in this change: the PID sits inside package runtimes that need the reference threaded through hot adapter code. Shows under App. |
-| Windows Claude | Not attributed: the SDK spawns the CLI itself there. |
+| Windows Claude                                      | Not attributed: the SDK spawns the CLI itself there.                                                                                 |
 
 ## Mobile compatibility
 

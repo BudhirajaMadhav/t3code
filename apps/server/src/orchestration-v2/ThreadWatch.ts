@@ -65,7 +65,7 @@ const asksSomeone = (request: OrchestrationV2RuntimeRequest) =>
 const byOrdinal = (left: OrchestrationV2Run, right: OrchestrationV2Run) =>
   left.ordinal - right.ordinal;
 
-export function watchOutcome(target: Target, watch: Watch): WatchOutcome | undefined {
+function watchOutcome(target: Target, watch: Watch): WatchOutcome | undefined {
   if (target.thread.deletedAt !== null) return { type: "deleted" };
   const watched =
     watch.runId === null
@@ -188,7 +188,7 @@ const logFailure =
       ? Effect.interrupt
       : Effect.logWarning(message, { ...fields, cause });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStoreV2;

@@ -30,11 +30,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { RegistryContext } from "@effect/atom-react";
-import { useContext, useRef, useState, type ReactNode } from "react";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { useContext, useState, type ReactNode } from "react";
 
 import {
   useResourceTelemetry,
@@ -42,6 +38,7 @@ import {
 } from "../../lib/resourceTelemetryState";
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/formatBytes";
+import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { Button } from "../ui/button";
