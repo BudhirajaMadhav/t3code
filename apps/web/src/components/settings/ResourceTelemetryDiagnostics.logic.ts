@@ -4,15 +4,6 @@ export function processIdentityKey(process: Pick<ResourceTelemetryProcess, "iden
   return `${process.identity.pid}:${process.identity.startTimeMs}`;
 }
 
-export function formatProcessName(
-  process: Pick<ResourceTelemetryProcess, "command" | "name">,
-): string {
-  if (process.name.trim()) return process.name;
-  const firstToken = process.command.trim().split(/\s+/)[0] ?? process.command;
-  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
-  return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
-}
-
 export function visibleResourceTelemetryProcesses(
   processes: ReadonlyArray<ResourceTelemetryProcess>,
   collapsed: ReadonlySet<string>,

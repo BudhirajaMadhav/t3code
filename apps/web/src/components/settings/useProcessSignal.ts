@@ -18,6 +18,15 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { processIdentityKey } from "./ResourceTelemetryDiagnostics.logic";
 
+export function formatProcessName(
+  process: Pick<ResourceTelemetryProcess, "command" | "name">,
+): string {
+  if (process.name.trim()) return process.name;
+  const firstToken = process.command.trim().split(/\s+/)[0] ?? process.command;
+  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
+  return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
+}
+
 /** The server signals only backend descendants; see `ProcessDiagnostics.signal`. */
 export function canSignalProcess(process: ResourceTelemetryProcess): boolean {
   return (

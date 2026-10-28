@@ -1,6 +1,7 @@
 import { OrchestratorMcpFailure, RunId, ThreadId } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -12,7 +13,7 @@ const dependencies = [
 
 const ThreadWatchTool = Tool.make("t3_thread_watch", {
   description:
-    "Needs an agent running inside a T3 thread. Have T3 Code wake THIS thread once when another thread's run ends (completed, failed, interrupted, or cancelled) or when that thread asks for an approval or an answer. The wake message carries the thread's link, status, pending request, and last assistant message. Use it instead of polling with t3_thread_wait or t3_thread_read or running a watcher, then end your turn. Works for any thread in this environment, in any project. It watches the thread's current run, or its next run when the thread is idle. A watch fires once; call again, or send to the thread with t3_thread_send, to watch again. t3_thread_launch and t3_thread_send already watch the thread they start or message. A subagent cannot watch.",
+    "Needs an agent running inside a T3 thread. Have T3 Code wake THIS thread once when another thread's run ends (completed, failed, interrupted, or cancelled) or when that thread asks for an approval or an answer. The wake message carries the thread's link, status, pending request, and last assistant message. Use it instead of polling with t3_thread_wait or t3_thread_read or running a watcher, then end your turn. Works for any thread in this environment, in any project. It watches the thread's current run, or its next run when the thread is idle. A watch fires once; call again, or send to the thread with t3_thread_send, to watch again. t3_thread_launch and t3_thread_send already watch the thread they start or message.",
   parameters: Schema.Struct({ threadId: ThreadId }),
   success: Schema.Struct({
     threadId: ThreadId,
@@ -27,7 +28,8 @@ const ThreadWatchTool = Tool.make("t3_thread_watch", {
   .annotate(Tool.Title, "Watch a T3 thread")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true);
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 const ThreadUnwatchTool = Tool.make("t3_thread_unwatch", {
   description:
@@ -41,6 +43,7 @@ const ThreadUnwatchTool = Tool.make("t3_thread_unwatch", {
   .annotate(Tool.Title, "Stop watching a T3 thread")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true);
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 export const ThreadWatchToolkit = Toolkit.make(ThreadWatchTool, ThreadUnwatchTool);

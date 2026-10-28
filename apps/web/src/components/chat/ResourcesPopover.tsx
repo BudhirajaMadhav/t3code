@@ -16,8 +16,11 @@ import { cn } from "~/lib/utils";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentScope } from "../../state/session";
 import { ProcessSignalActions } from "../settings/ProcessSignalActions";
-import { formatProcessName } from "../settings/ResourceTelemetryDiagnostics.logic";
-import { canSignalProcess, useProcessSignal } from "../settings/useProcessSignal";
+import {
+  canSignalProcess,
+  formatProcessName,
+  useProcessSignal,
+} from "../settings/useProcessSignal";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
