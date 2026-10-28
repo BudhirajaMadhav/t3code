@@ -1,6 +1,5 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
-import type { SectionMenuId } from "./SidebarCustomSections.logic";
 
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
@@ -24,8 +23,7 @@ export type ThreadActionMenuId =
   | "copy-branch"
   | "copy-thread-id"
   | "archive"
-  | "delete"
-  | SectionMenuId;
+  | "delete";
 
 export type DraftActionMenuId =
   | "copy"
@@ -88,8 +86,6 @@ export interface ThreadActionMenuState {
     readonly titleRegeneration: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
-  /** "Move to section"; null when the environment has no sections support. */
-  readonly sectionMenu?: ContextMenuItem<SectionMenuId> | null;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -151,7 +147,6 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    ...(state.sectionMenu ? [state.sectionMenu] : []),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
