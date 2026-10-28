@@ -316,6 +316,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     const diffOpen =
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
     explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+    if (embedded) markExplicitDiffOpenAcrossNavigation(scopedThreadKey(activeThreadRef));
     useDiffPanelStore.getState().selectToolCall(activeThreadRef, target);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();

@@ -65,6 +65,7 @@ const thread = (
     readonly archivedAt?: DateTime.Utc;
     readonly deletedAt?: DateTime.Utc;
     readonly subagentOf?: ThreadId;
+    readonly sideChat?: boolean;
     readonly title?: string;
     readonly settledAt?: DateTime.Utc;
     readonly linkedPullRequest?: ThreadLinkedPullRequest;
@@ -91,6 +92,7 @@ const thread = (
     linkedPullRequest: overrides.linkedPullRequest ?? null,
     branchPullRequest: overrides.branchPullRequest ?? null,
     activeProviderThreadId: null,
+    ...(overrides.sideChat === undefined ? {} : { sideChat: overrides.sideChat }),
     lineage: overrides.subagentOf
       ? {
           parentThreadId: overrides.subagentOf,
@@ -685,6 +687,7 @@ it.layer(layerTest)("ThreadSearch.searchOlderSettled", (it) => {
           thread(id("recent"), project, { title: "Kestrel nest", settledAt: at(50) }),
           thread(id("open"), project, { title: "Kestrel nest" }),
           thread(id("child"), project, { title: "Kestrel nest", subagentOf: id("old") }),
+          thread(id("side"), project, { title: "Kestrel nest", settledAt: old, sideChat: true }),
           thread(id("elsewhere"), other, { title: "Kestrel nest", settledAt: old }),
           thread(id("note"), project, { title: "Unrelated", settledAt: old }),
           thread(id("new-note"), project, { title: "Unrelated", settledAt: at(50) }),
@@ -693,7 +696,8 @@ it.layer(layerTest)("ThreadSearch.searchOlderSettled", (it) => {
         { discard: true },
       );
       const before = DateTime.formatIso(at(30));
-      const messageThreadIds = [id("new-note"), id("note"), id("old")];
+      // A settled side chat matches by title and by message, yet never counts as an older thread.
+      const messageThreadIds = [id("new-note"), id("note"), id("old"), id("side")];
       assert.sameMembers(
         [...(yield* search.searchOlderSettled({ query: "kestrel", before, messageThreadIds }))],
         [id("old"), id("elsewhere"), id("note")],

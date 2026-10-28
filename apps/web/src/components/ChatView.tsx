@@ -1074,7 +1074,7 @@ export default function ChatView(props: ChatViewProps) {
         const threadRef = scopeThreadRef(environmentId, threadId);
         if (activeRightPanelSurface?.kind === "aside") {
           useRightPanelStore.getState().setMaximized(threadRef, false);
-          if (shouldUsePlanSidebarSheet) useRightPanelStore.getState().close(threadRef);
+          if (prefersPlanSidebarSheet) useRightPanelStore.getState().close(threadRef);
         }
         focus.release(scopedThreadKey(threadRef));
       }
@@ -3232,7 +3232,7 @@ export default function ChatView(props: ChatViewProps) {
           composerRef={sideComposerRef}
           focused={focusedSideChatId === surface.threadId}
           composerSlot={sideChatComposerSlot}
-          coveringParent={shouldUsePlanSidebarSheet}
+          coveringParent={prefersPlanSidebarSheet}
         />
       )}
     />
@@ -3381,7 +3381,7 @@ export default function ChatView(props: ChatViewProps) {
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
             />
             <div
-              {...conversationArea}
+              {...(embedded ? {} : conversationArea)}
               className="relative flex min-h-0 flex-1 flex-col bg-background"
             >
               <ThreadTimeline
@@ -3498,7 +3498,7 @@ export default function ChatView(props: ChatViewProps) {
             </div>
 
             <div
-              {...composerArea}
+              {...(embedded ? {} : composerArea)}
               ref={(overlay: HTMLDivElement | null) => {
                 setComposerOverlayElement(overlay);
                 attachFollowComposerOverlay(overlay);
