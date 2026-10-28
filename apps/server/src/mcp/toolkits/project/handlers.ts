@@ -12,7 +12,6 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { watchAfterHandoff } from "../threadWatch/handlers.ts";
-import { checkSection, placeNewThreads } from "../sections/placement.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
@@ -63,7 +62,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const threadId = ThreadId.make(commandId);
         const messageId = MessageId.make(commandId);
         const attachments = input.attachments ?? [];
-        yield* checkSection(input.sectionId);
         if (attachments.some((attachment) => !Claims.attachmentIsPendingUpload(attachment)))
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
@@ -175,12 +173,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           }),
         );
         const thread = result.projection.thread;
-        // A launched thread records no parent, so the caller's section is applied here.
-        yield* placeNewThreads({
-          threadIds: [thread.id],
-          sectionId: input.sectionId,
-          parentThreadId: caller?.id,
-        });
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         return {
           threadId: thread.id,

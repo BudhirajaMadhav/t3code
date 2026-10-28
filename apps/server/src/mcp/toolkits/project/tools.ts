@@ -30,8 +30,6 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as SidebarSections from "../../../sidebarSections/SidebarSections.ts";
-import { NewThreadSectionInput } from "../sections/tools.ts";
 
 const shared = {
   success: Project,
@@ -138,7 +136,6 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
           "Default true from inside a T3 thread: wake the calling thread when the new thread's first run ends. False skips it.",
       }),
     ),
-    sectionId: NewThreadSectionInput,
   }),
   success: Schema.Struct({
     threadId: ThreadId,
@@ -156,7 +153,6 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
     ServerSettings.ServerSettingsService,
-    SidebarSections.SidebarSections,
   ],
 })
   .annotate(Tool.Destructive, true)

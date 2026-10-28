@@ -47,8 +47,6 @@ import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
-import { SectionToolkit } from "./toolkits/sections/tools.ts";
-import * as SectionHandlers from "./toolkits/sections/handlers.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadWatchToolkit } from "./toolkits/threadWatch/tools.ts";
 import * as ThreadWatchHandlers from "./toolkits/threadWatch/handlers.ts";
@@ -1023,7 +1021,6 @@ export const layerThreadWatchToolkit = toolkitRegistration(
   ThreadWatchToolkit,
   ThreadWatchHandlers.layer,
 );
-export const layerSectionToolkit = toolkitRegistration(SectionToolkit, SectionHandlers.layer);
 
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
@@ -1080,7 +1077,6 @@ export const layer = Layer.mergeAll(
   layerOrchestratorToolkit,
   layerThreadToolkit,
   layerThreadWatchToolkit,
-  layerSectionToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,

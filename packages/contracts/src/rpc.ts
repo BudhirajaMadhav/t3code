@@ -360,13 +360,6 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
-import {
-  SidebarSectionNotFoundError,
-  SidebarSectionPersistenceError,
-  SidebarSectionsState,
-  SidebarSectionsUpdateInput,
-  SidebarSectionsUpdateResult,
-} from "./sidebarSection.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -533,9 +526,6 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
-
-  sidebarSectionsSubscribe: "sidebarSections.subscribe",
-  sidebarSectionsUpdate: "sidebarSections.update",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -1806,23 +1796,6 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
-const WsSidebarSectionsSubscribeRpc = Rpc.make(WS_METHODS.sidebarSectionsSubscribe, {
-  payload: Schema.Struct({}),
-  success: SidebarSectionsState,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-const WsSidebarSectionsUpdateRpc = Rpc.make(WS_METHODS.sidebarSectionsUpdate, {
-  payload: SidebarSectionsUpdateInput,
-  success: SidebarSectionsUpdateResult,
-  error: Schema.Union([
-    SidebarSectionNotFoundError,
-    SidebarSectionPersistenceError,
-    EnvironmentAuthorizationError,
-  ]),
-});
-
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -1981,8 +1954,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
-  WsSidebarSectionsSubscribeRpc,
-  WsSidebarSectionsUpdateRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

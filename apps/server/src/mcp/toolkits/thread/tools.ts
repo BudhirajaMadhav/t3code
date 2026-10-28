@@ -27,8 +27,6 @@ import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as SidebarSections from "../../../sidebarSections/SidebarSections.ts";
-import { NewThreadSectionInput } from "../sections/tools.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
@@ -210,10 +208,8 @@ const ThreadForkTool = Tool.make("t3_thread_fork", {
     threadId: Schema.optional(ThreadId),
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
-    sectionId: NewThreadSectionInput,
   }),
   success: transferResult,
-  dependencies: [...commandTool.dependencies, SidebarSections.SidebarSections],
 }).annotate(Tool.Destructive, true);
 const ThreadMergeBackTool = Tool.make("t3_thread_merge_back", {
   ...commandTool,

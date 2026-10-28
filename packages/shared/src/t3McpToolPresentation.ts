@@ -306,20 +306,6 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_search: tool(["Search", "Searching", "Searched", "thread content"], "thread-search"),
   t3_thread_transfers: tool(["Read", "Reading", "Read", "thread transfers"], "thread-transfers"),
   t3_thread_organize: tool(["Organize", "Organizing", "Organized", "a thread"], "thread-organize"),
-  t3_section_list: tool(["List", "Listing", "Listed", "sidebar sections"], "thread-organize"),
-  t3_section_create: tool(
-    ["Create", "Creating", "Created", "a sidebar section"],
-    "thread-organize",
-  ),
-  t3_section_rename: tool(
-    ["Rename", "Renaming", "Renamed", "a sidebar section"],
-    "thread-organize",
-  ),
-  t3_section_delete: tool(
-    ["Delete", "Deleting", "Deleted", "a sidebar section"],
-    "thread-organize",
-  ),
-  t3_section_assign: tool(["Move", "Moving", "Moved", "threads to a section"], "thread-organize"),
   t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
