@@ -688,6 +688,25 @@ export const make = Effect.gen(function* () {
     return `path:${normalizeProjectPathForComparison(realPath)}`;
   });
 
+  // Submodule pointers are repositories; linked-worktree pointers live under `worktrees/`.
+  const readGitDirectory = Effect.fn("AgentSessionScanner.readGitDirectory")(function* (
+    directory: string,
+  ) {
+    const gitPath = path.join(directory, ".git");
+    const gitStats = yield* statOption(gitPath);
+    if (Option.isNone(gitStats)) return { _tag: "NotGit" } as const;
+    if (gitStats.value.type === "Directory") {
+      return { _tag: "Repository", gitDir: gitPath } as const;
+    }
+    const pointer = yield* fileSystem.readFileString(gitPath).pipe(Effect.orElseSucceed(() => ""));
+    const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
+    if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
+    const gitDir = path.resolve(directory, target);
+    return /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)
+      ? ({ _tag: "Worktree", gitDir } as const)
+      : ({ _tag: "Repository", gitDir } as const);
+  });
+
   const readGitIdentity = Effect.fn("AgentSessionScanner.readGitIdentity")(function* (
     directory: string,
   ): Effect.fn.Return<
@@ -695,20 +714,10 @@ export const make = Effect.gen(function* () {
     | { readonly _tag: "Worktree" }
     | { readonly _tag: "NotGit" }
   > {
-    const gitPath = path.join(directory, ".git");
-    const gitStats = yield* statOption(gitPath);
-    if (Option.isNone(gitStats)) return { _tag: "NotGit" } as const;
-    let gitDir = gitPath;
-    if (gitStats.value.type !== "Directory") {
-      const pointer = yield* fileSystem
-        .readFileString(gitPath)
-        .pipe(Effect.orElseSucceed(() => ""));
-      const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-      if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
-      gitDir = path.resolve(directory, target);
-    }
-    const linkedWorktree =
-      gitStats.value.type !== "Directory" && /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir);
+    const directoryInfo = yield* readGitDirectory(directory);
+    if (directoryInfo._tag === "NotGit") return directoryInfo;
+    let gitDir = directoryInfo.gitDir;
+    const linkedWorktree = directoryInfo._tag === "Worktree";
     if (linkedWorktree) {
       const commonDir = yield* fileSystem
         .readFileString(path.join(gitDir, "commondir"))
@@ -730,25 +739,6 @@ export const make = Effect.gen(function* () {
         repository: repositoryPathFromRemoteUrl(originUrl),
       },
     } as const;
-  });
-
-  // Submodule pointers are repositories; linked-worktree pointers live under `worktrees/`.
-  const readGitDirectory = Effect.fn("AgentSessionScanner.readGitDirectory")(function* (
-    directory: string,
-  ) {
-    const gitPath = path.join(directory, ".git");
-    const gitStats = yield* statOption(gitPath);
-    if (Option.isNone(gitStats)) return { _tag: "NotGit" } as const;
-    if (gitStats.value.type === "Directory") {
-      return { _tag: "Repository", gitDir: gitPath } as const;
-    }
-    const pointer = yield* fileSystem.readFileString(gitPath).pipe(Effect.orElseSucceed(() => ""));
-    const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-    if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
-    const gitDir = path.resolve(directory, target);
-    return /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)
-      ? ({ _tag: "Worktree", gitDir } as const)
-      : ({ _tag: "Repository", gitDir } as const);
   });
 
   const matchProjectCheckout = Effect.fn("AgentSessionScanner.matchProjectCheckout")(function* (
@@ -1379,13 +1369,8 @@ export const make = Effect.gen(function* () {
       (directory) => {
         const resolved = path.resolve(directory);
         return fileSystem.realPath(resolved).pipe(
-          Effect.catchTags({
-            PlatformError: (cause) =>
-              Effect.succeed(cause.reason._tag === "NotFound" ? resolved : null),
-          }),
-          Effect.map((real) =>
-            real === null || isFilesystemRoot(real, path) ? [] : [resolved, real],
-          ),
+          Effect.orElseSucceed(() => resolved),
+          Effect.map((real) => (isFilesystemRoot(real, path) ? [] : [resolved, real])),
         );
       },
     )).flat();

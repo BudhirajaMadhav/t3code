@@ -16,6 +16,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -1602,52 +1603,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("uses configured order when custom instances share a session home", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
-        yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const sharedHome = yield* makeTempDir("t3code-codex-shared-");
-        const workspace = yield* makeTempDir("t3code-workspace-");
-
-        yield* writeTranscript({
-          filePath: path.join(sharedHome, "sessions", "2026", "08", "24", "rollout-shared.jsonl"),
-          contents: [
-            encodeTranscriptRecord({
-              type: "session_meta",
-              payload: { id: "shared-session", cwd: workspace },
-            }),
-            encodeTranscriptRecord({
-              type: "event_msg",
-              payload: { type: "user_message", message: "Use the first account" },
-            }),
-          ].join("\n"),
-          mtimeMs: nowMs,
-        });
-
-        const threads = yield* runRecentThreads({
-          claudeHomePath,
-          codexHomePath,
-          workspaceRoot: workspace,
-          providerInstances: {
-            [ProviderInstanceId.make("codex-work")]: {
-              driver: ProviderDriverKind.make("codex"),
-              config: { homePath: sharedHome },
-            },
-            [ProviderInstanceId.make("codex-personal")]: {
-              driver: ProviderDriverKind.make("codex"),
-              config: { homePath: sharedHome },
-            },
-          },
-        });
-
-        expect(threads.map((thread) => thread.providerInstanceId)).toEqual(["codex-work"]);
-      }),
-    );
-
-    it.effect.each(["directory", "pointer"] as const)(
+    it.effect.each(["directory", "pointer", "unreadable-managed-directory"] as const)(
       "imports only the project's linked worktrees with their branches when .git is a %s",
       (layout) =>
         Effect.gen(function* () {
@@ -1661,7 +1617,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           const repo = yield* makeTempDir("t3code-workspace-repo-");
           const otherRepo = yield* makeTempDir("t3code-workspace-other-");
           const commonGitDir =
-            layout === "directory"
+            layout !== "pointer"
               ? path.join(repo, ".git")
               : yield* makeTempDir("t3code-separate-git-dir-");
           if (layout === "pointer") {
@@ -1671,7 +1627,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           const worktree = path.join(repo, ".claude", "worktrees", "feature");
           const externalWorktree = yield* makeTempDir("t3code-workspace-feature-");
           const managedWorktree = path.join(configBaseDir, "worktrees", "repo", "managed");
-          const customDirectory = yield* makeTempDir("t3code-custom-worktrees-");
+          const customDirectory = yield* makeTempDir("t3code-custom-worktrees-").pipe(
+            Effect.flatMap((directory) => fileSystem.realPath(directory)),
+          );
           const previousDirectory = yield* makeTempDir("t3code-previous-worktrees-");
           const customWorktree = path.join(customDirectory, "repo", "custom");
           const previousWorktree = path.join(previousDirectory, "repo", "previous");
@@ -1719,7 +1677,8 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                 sessionId: `${name}-alias-session`,
                 cwd: path.join(alias, "repo", branch),
               });
-              if (name === "custom") worktreesDirectory = alias;
+              if (name === "custom" && layout !== "unreadable-managed-directory")
+                worktreesDirectory = alias;
               if (name === "previous") previousWorktreesDirectories[0] = alias;
             }
             const rootAlias = path.join(aliases, "root");
@@ -1749,7 +1708,26 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             workspaceRoot: repo,
             worktreesDirectory,
             previousWorktreesDirectories,
-          });
+          }).pipe(
+            Effect.provideService(
+              FileSystem.FileSystem,
+              FileSystem.FileSystem.of({
+                ...fileSystem,
+                realPath: (target) =>
+                  layout === "unreadable-managed-directory" && target === worktreesDirectory
+                    ? Effect.fail(
+                        new PlatformError.PlatformError(
+                          new PlatformError.SystemError({
+                            _tag: "PermissionDenied",
+                            module: "FileSystem",
+                            method: "realPath",
+                          }),
+                        ),
+                      )
+                    : fileSystem.realPath(target),
+              }),
+            ),
+          );
 
           expect(
             outcomes.flatMap((outcome) =>
@@ -1766,6 +1744,51 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             },
           ]);
         }),
+    );
+
+    it.effect("uses configured order when custom instances share a session home", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+        const workspace = yield* makeTempDir("t3code-workspace-");
+
+        yield* writeTranscript({
+          filePath: path.join(sharedHome, "sessions", "2026", "08", "24", "rollout-shared.jsonl"),
+          contents: [
+            encodeTranscriptRecord({
+              type: "session_meta",
+              payload: { id: "shared-session", cwd: workspace },
+            }),
+            encodeTranscriptRecord({
+              type: "event_msg",
+              payload: { type: "user_message", message: "Use the first account" },
+            }),
+          ].join("\n"),
+          mtimeMs: nowMs,
+        });
+
+        const threads = yield* runRecentThreads({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+          providerInstances: {
+            [ProviderInstanceId.make("codex-work")]: {
+              driver: ProviderDriverKind.make("codex"),
+              config: { homePath: sharedHome },
+            },
+            [ProviderInstanceId.make("codex-personal")]: {
+              driver: ProviderDriverKind.make("codex"),
+              config: { homePath: sharedHome },
+            },
+          },
+        });
+
+        expect(threads.map((thread) => thread.providerInstanceId)).toEqual(["codex-work"]);
+      }),
     );
   });
 });
