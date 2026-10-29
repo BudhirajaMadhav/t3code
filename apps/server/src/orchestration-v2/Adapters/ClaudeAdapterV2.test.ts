@@ -4159,6 +4159,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         memoryFiles: [],
         mcpTools: [],
         agents: [],
+        isAutoCompactEnabled: true,
+        apiUsage: null,
       } satisfies ClaudeSdk.SDKControlGetContextUsageResponse;
       const harness = yield* makeWakeHarnessWithOptions({ getContextUsage: Effect.succeed(usage) });
       const read = harness.runtime.readContextBreakdown!;
