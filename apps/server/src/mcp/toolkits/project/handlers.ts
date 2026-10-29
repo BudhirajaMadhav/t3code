@@ -24,7 +24,6 @@ import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
-import { watchAfterHandoff } from "../threadWatch/handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
@@ -246,11 +245,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           modelSelection: thread.modelSelection,
           runId: run?.id ?? null,
           status: run?.status ?? null,
-          watching: yield* watchAfterHandoff({
-            targetThreadId: thread.id,
-            runId: run?.id ?? null,
-            watch: input.watch,
-          }),
         };
       }),
     // The launched thread carries the caller's link, if it has one.

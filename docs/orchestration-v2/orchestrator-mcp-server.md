@@ -11,9 +11,8 @@ agent can use this endpoint to:
 - create one or more ordinary top-level T3 threads;
 - list a project's threads and incrementally read any thread;
 - rename threads, regenerate titles, and link or unlink pull requests;
-- send or steer follow-up messages;
-- wait for or interrupt ordinary thread runs; and
-- watch another thread, so its run ending wakes the caller.
+- send or steer follow-up messages; and
+- wait for or interrupt ordinary thread runs.
 
 These are T3 orchestration operations, not provider-native sub-agent APIs.
 Delegated tasks always create a T3 child thread and run. The child receives
@@ -367,8 +366,6 @@ its own under the environment's Scratch project. For stacked PRs, use the parent
 `startFromOrigin: false`. The new thread may not run with broader runtime or
 interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
 launching again. `create_threads` remains the batch option for a shared checkout.
-From inside a thread, a launch watches the new thread's first run (see
-`t3_thread_watch`); `watch: false` skips it, and the result reports `watching`.
 
 ### `t3_thread_list`
 
@@ -438,36 +435,12 @@ The target runtime and interaction modes may not be broader than the caller's.
 Stable command and message IDs are derived from `clientRequestId` for
 idempotent retries.
 
-From inside a thread, a send watches the run that received the message (see
-`t3_thread_watch`) unless `watch: false` is passed or the result has a
-`taskId`, whose completion already reaches the parent. The result reports
-`watching`.
-
 ### `t3_thread_wait`
 
 Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
-
-### `t3_thread_watch` and `t3_thread_unwatch`
-
-`t3_thread_watch` makes the calling thread wake once when another thread's
-watched run ends (completed, failed, interrupted, cancelled, or rolled back),
-when that thread raises a new approval or question, or when it is deleted. Any
-thread in the environment can be watched, in any project, by several watchers.
-The watch covers the target's current run, or its next run when the target is
-idle; a send pins the run its message reached. The wake is a server-created
-`monitor` notification queued like a pull request watch wake, so it starts the
-watcher when idle and waits behind an active run. It carries the target's link,
-status, pending request, and last assistant message, cut at 4,000 characters.
-
-A watch is one-shot. A later send or watch re-arms it. A request that was
-already pending when the watch was armed does not fire it. An archived or
-deleted watcher drops its watches silently; a subagent cannot watch, and a
-thread cannot watch itself. Watches live in the `thread_watches` table, so they
-survive a restart; a check at startup delivers what the server missed.
-`t3_thread_unwatch` removes the caller's watch and reports `wasWatching`.
 
 ### `t3_thread_interrupt`
 

@@ -13,7 +13,6 @@ Ordinary coding tasks need no T3 tools.
 - If you are a subagent or child, do the work yourself. Start no subagents unless your task says to.`,
   `- \`t3_thread_launch\` and \`create_threads\` make new top-level threads, only when the user asks for a new thread. "Subagent", "delegate", and "parallel" never mean one. Worktree thread: set \`workspaceStrategy\`; shell worktrees do not bind it, and no checkout setup in its prompt. No \`workspaceStrategy\`: project root, not your worktree.
 - Given a thread id, \`t3_thread_read\` it before you answer about it.
-- A \`t3_thread_launch\` or \`t3_thread_send\` from inside a thread watches the target: T3 Code wakes you once when that run ends or the target asks for an approval or an answer, so end your turn instead of polling. \`watch:false\` skips it. \`t3_thread_watch\` / \`t3_thread_unwatch\` watch or stop watching any thread.
 - Another machine: \`t3_environment_links\` lists linked ones. Pass its \`environmentId\` to a T3 tool to act there. Ids are then that machine's, so pass \`threadId\`.
 - A machine the user names that is not linked ("delegate this to my vps"): call \`t3_environment_link\` with a \`hint\` from their words. Never ask for a pairing code in chat.
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.

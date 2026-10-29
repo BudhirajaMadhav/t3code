@@ -10,7 +10,6 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
-import { watchAfterHandoff } from "../threadWatch/handlers.ts";
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads((input) =>
@@ -171,20 +170,11 @@ const handlers = {
   ),
   t3_thread_send: McpToolAccess.writesThreads(
     (input) => [input.threadId],
-    ({ watch, ...input }) =>
+    (input) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        const result = yield* service.sendToThread(scope, input);
-        // A delegated task's completion already reaches its parent; a watch would wake it twice.
-        const watching =
-          result.taskId === undefined &&
-          (yield* watchAfterHandoff({
-            targetThreadId: result.threadId,
-            runId: result.runId,
-            watch,
-          }));
-        return { ...result, watching };
+        return yield* service.sendToThread(scope, input);
       }),
   ),
   t3_thread_wait: McpToolAccess.reads((input) =>
