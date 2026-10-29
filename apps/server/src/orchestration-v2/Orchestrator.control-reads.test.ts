@@ -37,6 +37,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -54,6 +55,7 @@ const layerDatabase = SqlitePersistence.layerMemory;
 const layerTest = Layer.mergeAll(
   layerDatabase,
   ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+  ProjectStore.layer.pipe(Layer.provide(layerDatabase)),
   EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "control-reads" },
@@ -991,6 +993,89 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
     const parentAfterChildLink = yield* projections.getThreadProjection(parentThreadId);
     assert.deepEqual(parentAfterChildLink.thread.linkedPullRequest, parentPullRequest);
     assert.deepEqual(parentAfterChildLink.thread.pullRequests, parent.thread.pullRequests);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("starts a delegated child in another project at that project's root", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const projects = yield* ProjectStore.ProjectStoreV2;
+    const parentThreadId = ThreadId.make("thread:cross-project-parent");
+    const otherProjectId = ProjectId.make("project:cross-project-other");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-cross-project-parent"),
+      threadId: parentThreadId,
+      projectId: ProjectId.make("project:cross-project-parent"),
+      title: "Parent in its own worktree",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "feature/parent",
+      worktreePath: "/repo-worktree",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("start-cross-project-parent"),
+      threadId: parentThreadId,
+      messageId: MessageId.make("message:cross-project-parent"),
+      text: "Fix the other repo",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const parentRun = (yield* projections.getThreadProjection(parentThreadId)).runs[0]!;
+    const request = (commandId: string) =>
+      orchestrator.dispatch({
+        type: "delegated_task.request",
+        commandId: CommandId.make(commandId),
+        parentThreadId,
+        parentRunId: parentRun.id,
+        parentNodeId: parentRun.rootNodeId!,
+        task: "Fix the other repo",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        projectId: otherProjectId,
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+
+    const missing = yield* request("delegate-cross-project-missing").pipe(Effect.flip);
+    assert.deepInclude(missing, { cause: `Project ${otherProjectId} was not found.` });
+
+    yield* projects.apply({
+      sequence: 1,
+      eventId: EventId.make("event:cross-project-other"),
+      aggregateKind: "project",
+      aggregateId: otherProjectId,
+      occurredAt: "2026-10-30T00:00:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.created",
+      payload: {
+        projectId: otherProjectId,
+        title: "Other repo",
+        workspaceRoot: "/other-repo",
+        defaultModelSelection: modelSelection,
+        scripts: [],
+        createdAt: "2026-10-30T00:00:00.000Z",
+        updatedAt: "2026-10-30T00:00:00.000Z",
+      },
+    });
+    yield* request("delegate-cross-project");
+    const task = (yield* projections.getThreadProjection(parentThreadId)).subagents[0]!;
+    const child = yield* projections.getThreadProjection(task.childThreadId!);
+    assert.equal(child.thread.projectId, otherProjectId);
+    assert.isNull(child.thread.branch);
+    assert.isNull(child.thread.worktreePath);
+    assert.equal(child.thread.lineage.parentThreadId, parentThreadId);
   }).pipe(Effect.provide(layerTest)),
 );
 

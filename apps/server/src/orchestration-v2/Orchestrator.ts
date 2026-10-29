@@ -7250,6 +7250,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
+      const otherProjectId =
+        command.projectId === undefined || command.projectId === parentProjection.thread.projectId
+          ? undefined
+          : command.projectId;
+      if (otherProjectId !== undefined) {
+        const project = yield* projects.get(otherProjectId).pipe(mapDispatchError(command));
+        if (Option.isNone(project) || project.value.deletedAt !== null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Project ${otherProjectId} was not found.`,
+          });
+        }
+      }
+
       const targetAdapter = yield* providerAdapters.get(command.modelSelection.instanceId).pipe(
         Effect.mapError(
           (cause) =>
@@ -7295,7 +7310,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
-        ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
+        ...(otherProjectId === undefined ? {} : { projectId: otherProjectId }),
+        ...(command.workspaceStrategy === undefined && otherProjectId === undefined
+          ? {}
+          : { branch: null, worktreePath: null }),
       };
       const task: OrchestrationV2Subagent = {
         id: taskNodeId,
