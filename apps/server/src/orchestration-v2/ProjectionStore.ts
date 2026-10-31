@@ -406,13 +406,7 @@ export interface ShellSnapshotOptions {
 /** What a shell subscriber's trims read from an active thread, without building its shell. */
 export interface ActiveShellIndexEntry extends Pick<
   OrchestrationV2ThreadShell,
-  | "id"
-  | "projectId"
-  | "lineage"
-  | "settledOverride"
-  | "settledAt"
-  | "pinnedAt"
-  | "snoozedUntil"
+  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pinnedAt" | "snoozedUntil"
 > {
   /** False only when no run, request, work item, or watch can make the shell live. */
   readonly mayBeLive: boolean;
