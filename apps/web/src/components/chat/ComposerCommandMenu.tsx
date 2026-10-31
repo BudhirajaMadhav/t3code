@@ -47,7 +47,7 @@ export type ComposerCommandItem =
   | {
       id: string;
       type: "slash-command";
-      command: ComposerSlashCommand | "side" | "btw";
+      command: ComposerSlashCommand;
       label: string;
       description: string;
     }

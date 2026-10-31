@@ -120,23 +120,6 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   });
 });
 
-it("never makes a subagent of a side chat a side chat", () => {
-  const childThread = makeSubagentChildThread({
-    parentThread: { ...makeParentThread(), sideChat: true },
-    childThreadId,
-    parentNodeId: NodeId.make("node:subagent-side-chat-parent"),
-    activeProviderThreadId: null,
-    providerInstanceId: childProviderInstanceId,
-    modelSelection: childModelSelection,
-    title: "Side chat subagent",
-    now: childCreatedAt,
-    createdBy: "agent",
-    creationSource: "provider",
-  });
-
-  assert.isFalse(childThread.sideChat);
-});
-
 it.effect.each([
   ["sql", ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))],
 ] as const)(

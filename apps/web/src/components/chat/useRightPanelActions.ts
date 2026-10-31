@@ -3,10 +3,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { ThreadPreviewState } from "../../previewStateStore";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
-import {
-  markExplicitDiffOpenAcrossNavigation,
-  resolveExplicitDiffOpenOnActivate,
-} from "../ChatView.logic";
+import { resolveExplicitDiffOpenOnActivate } from "../ChatView.logic";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { type ScopedThreadRef, type RunId } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -61,8 +58,6 @@ interface RightPanelActionsInput {
   readonly gitCwd: string | null;
   readonly activeProjectCwd: string | null;
   readonly explicitDiffOpenRef: { current: ScopedThreadRef | null };
-  /** A side chat inside its parent's panel; it leaves global actions to the parent. */
-  readonly embedded: boolean;
   readonly onDiffPanelOpen: (() => void) | undefined;
   readonly closeRightPanelSurface: (surface: RightPanelSurface) => void;
 }
@@ -96,7 +91,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     gitCwd,
     activeProjectCwd,
     explicitDiffOpenRef,
-    embedded,
     onDiffPanelOpen,
   } = input;
 
@@ -305,8 +299,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     const diffOpen =
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
     explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-    // Embedded, opening the diff navigates to this thread as a full view.
-    if (embedded) markExplicitDiffOpenAcrossNavigation(scopedThreadKey(activeThreadRef));
     useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
@@ -316,22 +308,18 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     const diffOpen =
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
     explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-    if (embedded) markExplicitDiffOpenAcrossNavigation(scopedThreadKey(activeThreadRef));
     useDiffPanelStore.getState().selectToolCall(activeThreadRef, target);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   });
   const onOpenTurnDiffStable = useStableCallback(onOpenTurnDiff);
-  // A global action: only the host answers it, so one press opens one browser.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the preview action bus to toggle the preview panel
   useEffect(
     () =>
-      embedded
-        ? undefined
-        : subscribePreviewAction((action) => {
-            if (action === "toggle-panel") togglePreviewPanelStable();
-          }),
-    [embedded, togglePreviewPanelStable],
+      subscribePreviewAction((action) => {
+        if (action === "toggle-panel") togglePreviewPanelStable();
+      }),
+    [togglePreviewPanelStable],
   );
 
   const shortcuts = {

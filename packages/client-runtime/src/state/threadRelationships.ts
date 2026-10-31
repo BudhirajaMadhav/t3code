@@ -89,15 +89,7 @@ export function deriveThreadRelationshipGraph(input: {
     addEdge({
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
-      // A linked thread inherited nothing, so it must not be labelled a fork.
-      kind:
-        thread.lineage.relationshipToParent === "subagent"
-          ? "subagent"
-          : thread.lineage.relationshipToParent === "fork"
-            ? "fork"
-            : thread.forkedFrom?.type === "run"
-              ? "fork"
-              : "parent",
+      kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
       status: thread.activityRunStatus ?? thread.status,
     });
   }

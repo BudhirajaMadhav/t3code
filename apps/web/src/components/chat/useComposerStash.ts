@@ -47,7 +47,6 @@ import {
 import { remainingComposerAttachmentSlots } from "./composerThreadImport";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { resizeSnapShotSource } from "../../lib/snapShotSource";
-import { composerTakesShortcut } from "./composerEventScope";
 import { registerCommands } from "../../shortcuts/dispatcher";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { toastManager } from "../ui/toast";
@@ -87,7 +86,6 @@ export function useComposerStash(input: {
   readonly attachmentTargetKey: string;
   readonly isComposerDraftTargetOpen: (targetKey: string) => boolean;
   readonly composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
-  readonly composerFormRef: RefObject<HTMLFormElement | null>;
   readonly isRevertingCheckpoint: () => boolean;
   readonly pendingThreadImportsRef: RefObject<Map<string, number>>;
   readonly setComposerCursor: Dispatch<SetStateAction<number>>;
@@ -118,7 +116,6 @@ export function useComposerStash(input: {
     attachmentTargetKey,
     isComposerDraftTargetOpen,
     composerEditorRef,
-    composerFormRef,
     isRevertingCheckpoint,
     pendingThreadImportsRef,
     setComposerCursor,
@@ -702,13 +699,9 @@ export function useComposerStash(input: {
     if (backgroundThread) return;
     return registerCommands(
       { "composer.stash": handleStashShortcut },
-      {
-        capture: true,
-        context: readShortcutContext,
-        when: (event) => composerTakesShortcut(event.target, composerFormRef.current),
-      },
+      { capture: true, context: readShortcutContext },
     );
-  }, [backgroundThread, composerFormRef, handleStashShortcut, readShortcutContext]);
+  }, [backgroundThread, handleStashShortcut, readShortcutContext]);
 
   return {
     stashQueue,

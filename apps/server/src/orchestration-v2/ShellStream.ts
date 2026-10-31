@@ -73,7 +73,7 @@ function buildActiveShellSnapshot(input: {
 
 type ShellTrimRow = Pick<
   OrchestrationV2ThreadShell,
-  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "sideChat"
+  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt"
 >;
 
 /**
@@ -98,16 +98,8 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
     if (row.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(row.id);
       if (row.lineage.parentThreadId) subagentParentIds.add(row.lineage.parentThreadId);
-    } else if (
-      row.sideChat !== true &&
-      row.settledOverride === "settled" &&
-      row.settledAt !== null
-    ) {
+    } else if (row.settledOverride === "settled" && row.settledAt !== null) {
       settledTimes.push(DateTime.toEpochMillis(row.settledAt));
-    }
-    // A subagent hosting a side chat stays, so the side chat keeps its parent.
-    if (row.sideChat === true && row.lineage.parentThreadId) {
-      subagentParentIds.add(row.lineage.parentThreadId);
     }
   }
   settledTimes.sort((left, right) => right - left);
@@ -129,15 +121,9 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
   };
 }
 
-function subagentAncestorIds(
-  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "lineage" | "sideChat">>,
-) {
+function subagentAncestorIds(threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "lineage">>) {
   const ancestorIds = new Set<string>();
   for (const thread of threads) {
-    // A side chat is never older settled, and its parent stays so clients keep it out of lists.
-    if (thread.sideChat === true && thread.lineage.parentThreadId !== null) {
-      ancestorIds.add(thread.lineage.parentThreadId);
-    }
     if (thread.lineage.relationshipToParent !== "subagent") continue;
     if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
     ancestorIds.add(thread.lineage.rootThreadId);
@@ -191,8 +177,8 @@ function omitOlderSettledShellsWith(
 
 /**
  * Idle subagent children have no sidebar row, so clients that opt in read them from their thread
- * family instead. A child stays while it is live or the parent of another child or a side chat, so
- * walks over shell rows never meet a gap and a side chat's parent is never taken for gone.
+ * family instead. A child stays while it is live or the parent of another child, so the request
+ * and working walks over shell rows never meet a gap in a nested chain.
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
@@ -269,10 +255,7 @@ function shellSubscriberThreadIds(
       entry.lineage.relationshipToParent === "subagent" &&
       (!options.omitIdleSubagents || entry.mayBeLive || facts.subagentParentIds.has(entry.id)),
   );
-  const ancestorIds = subagentAncestorIds([
-    ...subagents,
-    ...index.filter((entry) => entry.sideChat === true),
-  ]);
+  const ancestorIds = subagentAncestorIds(subagents);
   const keptSubagentIds = new Set(subagents.map((entry) => entry.id));
   const beforeMs = facts.olderSettledBeforeMs;
   return index.flatMap((entry) =>

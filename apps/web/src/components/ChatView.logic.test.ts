@@ -40,10 +40,8 @@ import {
   getAntigravitySendBlockReason,
   resolveComposerProviderSelection,
   resolveWorktreeSetupProgress,
-  markExplicitDiffOpenAcrossNavigation,
   peekRememberedThreadTimeline,
   rememberReadyThreadTimeline,
-  takeExplicitDiffOpenAcrossNavigation,
   resetHeldThreadTimeline,
   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
@@ -351,18 +349,6 @@ describe("deriveCommittedServerUserMessageIds", () => {
     expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
       new Set([turnStartId, steerId]),
     );
-  });
-});
-
-describe("explicit diff open across navigation", () => {
-  it("keeps a turn diff opened from an embedded side chat once, for that thread only", () => {
-    markExplicitDiffOpenAcrossNavigation("env-1:side");
-    expect(takeExplicitDiffOpenAcrossNavigation("env-1:other")).toBe(false);
-    expect(takeExplicitDiffOpenAcrossNavigation("env-1:side")).toBe(false);
-
-    markExplicitDiffOpenAcrossNavigation("env-1:side");
-    expect(takeExplicitDiffOpenAcrossNavigation("env-1:side")).toBe(true);
-    expect(takeExplicitDiffOpenAcrossNavigation("env-1:side")).toBe(false);
   });
 });
 

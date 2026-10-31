@@ -167,10 +167,7 @@ import { dedupeSnapshotBodies } from "@t3tools/shared/orchestrationV2DedupedBodi
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
-import {
-  dispatchRejectionReason,
-  userFacingDispatchErrorMessage,
-} from "./orchestration-v2/UserFacingErrors.ts";
+import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -993,7 +990,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
     let subagentThreadIds = new Set<string>();
-    const publishedThreadIds = new Set<string>();
     const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
       shouldPublishShellApplicationEvent(stored, subagentThreadIds);
 
@@ -1075,19 +1071,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
               return yield* projectItem(stored);
             }
             const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
-            const item = shellStreamItemFromThreadShell({ stored, shell });
-            if (
-              shell?.sideChat === true &&
-              shell.lineage.parentThreadId !== null &&
-              !publishedThreadIds.has(shell.lineage.parentThreadId) &&
-              item.kind === "thread.updated"
-            ) {
-              const parent = yield* threadManagement.getThreadShell(shell.lineage.parentThreadId);
-              if (parent !== null && parent.deletedAt === null && parent.archivedAt === null) {
-                return { ...item, parentThread: parent };
-              }
-            }
-            return item;
+            return shellStreamItemFromThreadShell({ stored, shell });
           }),
         { concurrency: 8 },
       );
@@ -1224,18 +1208,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
     return stream.pipe(
       dedupeShellEnrichment,
-      Stream.tap((item) =>
-        Effect.sync(() => {
-          if (item.kind === "snapshot") {
-            for (const thread of item.snapshot.threads) publishedThreadIds.add(thread.id);
-          } else if (item.kind === "thread.updated") {
-            publishedThreadIds.add(item.thread.id);
-            if (item.parentThread !== undefined) publishedThreadIds.add(item.parentThread.id);
-          } else if (item.kind === "thread.removed") {
-            publishedThreadIds.delete(item.threadId);
-          }
-        }),
-      ),
       Stream.mapError(
         (cause) =>
           new OrchestrationV2GetShellSnapshotError({
@@ -1931,13 +1903,11 @@ export const layerWsRpc = (
                   Effect.map((result) => ({ sequence: result.sequence })),
                   Effect.mapError((cause) => {
                     const detail = userFacingDispatchErrorMessage(cause);
-                    const reason = dispatchRejectionReason(cause);
                     return new OrchestrationV2DispatchCommandError({
                       commandId: command.commandId,
                       commandType: command.type,
                       message: detail ?? "Failed to dispatch orchestration V2 command",
                       ...(detail === undefined ? {} : { detail }),
-                      ...(reason === undefined ? {} : { reason }),
                       cause,
                     });
                   }),
