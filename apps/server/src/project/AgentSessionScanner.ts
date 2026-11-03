@@ -12,8 +12,8 @@ import {
   type AgentSessionProjectGit,
   type AgentSessionScanResult,
   type ProviderInstanceConfig,
-  type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,13 +31,13 @@ import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
-import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
   createTranscriptJsonReader,
@@ -65,6 +65,21 @@ const MAX_IMPORT_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORT_TRANSCRIPTS = 100;
 const MAX_IMPORT_RECORDS = 100_000;
+
+/**
+ * open() of a file under macOS privacy protection waits on a consent prompt
+ * that a headless server never gets, and a FIFO waits for a writer. Either
+ * pins a libuv pool thread that interruption cannot free, so git files of
+ * arbitrary transcript cwds are read by a `cat` child we can kill instead.
+ */
+const GIT_FILE_READ_DEADLINE = "2 seconds";
+const MAX_GIT_FILE_BYTES = 1024 * 1024;
+// Reads run concurrently, so each phase waits one deadline per batch of this
+// many blocked files rather than one per blocked file.
+const GIT_FILE_READ_CONCURRENCY = 16;
+// A blocked path is skipped for a while, then read again in case it was fixed.
+const BLOCKED_GIT_FILE_RETRY_MS = 5 * 60 * 1000;
+const MAX_BLOCKED_GIT_FILE_PATHS = 1024;
 
 const TranscriptContentBlock = Schema.Struct({
   type: Schema.optional(Schema.String),
@@ -157,6 +172,7 @@ export interface AgentSessionThread {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
+  readonly omittedMessageCount: number;
 }
 
 export type AgentSessionRecentThread =
@@ -164,7 +180,6 @@ export type AgentSessionRecentThread =
       readonly _tag: "Importable";
       readonly thread: AgentSessionThread;
       readonly source: AgentSessionImportSource;
-      readonly worktree: { readonly path: string; readonly branch: string | null } | null;
     }
   | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
   | { readonly _tag: "Duplicate"; readonly source: AgentSessionImportSource }
@@ -452,6 +467,7 @@ function parseAgentSessionRecords(
     finishCodexTurn();
   }
 
+  let conversationMessageCount = 0;
   const retainMessage = (
     message: AgentSessionThreadMessage & { readonly codexResponseUser: boolean },
   ) => {
@@ -461,6 +477,7 @@ function parseAgentSessionRecords(
     if (derivedTitle === undefined && message.role === "user") {
       derivedTitle = deriveTitle(input.source, message.text);
     }
+    conversationMessageCount += 1;
     messages.push(message);
     if (messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
   };
@@ -532,6 +549,7 @@ function parseAgentSessionRecords(
         if (message?.codexResponseUser === true && message.text.trim() === text.trim()) {
           if (firstUserMessage === message) firstUserMessage = undefined;
           messages.splice(index, 1);
+          conversationMessageCount -= 1;
           break;
         }
       }
@@ -586,6 +604,7 @@ function parseAgentSessionRecords(
     createdAt: retainedMessages[0]?.createdAt ?? fallbackTimestamp,
     updatedAt: fallbackTimestamp,
     messages: retainedMessages,
+    omittedMessageCount: conversationMessageCount - retainedMessages.length,
   };
 }
 
@@ -629,14 +648,13 @@ function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
 
 function isT3ManagedWorktree(
   candidatePath: string,
-  worktreesDirectories: ReadonlyArray<string>,
+  worktreesDir: string,
   caseFold: boolean,
 ): boolean {
   const normalized = normalizeForWorktreeMatch(candidatePath, caseFold);
   return (
-    worktreesDirectories.some((directory) =>
-      normalized.startsWith(normalizeForWorktreeMatch(directory, caseFold)),
-    ) || normalized.includes("/.t3/worktrees/")
+    normalized.startsWith(normalizeForWorktreeMatch(worktreesDir, caseFold)) ||
+    normalized.includes("/.t3/worktrees/")
   );
 }
 
@@ -717,18 +735,17 @@ function sameTranscriptIdentity(left: TranscriptIdentity, right: TranscriptIdent
 /** @public */
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
   // Concurrent client imports must not hold multiple selected-history budgets.
   const importReadLock = yield* Semaphore.make(1);
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const readSettings = serverSettings.getSettings.pipe(
-    Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
-  );
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
-  const foldWorktreeCase = (yield* HostProcess.Platform) === "win32";
+  const isWindows = (yield* HostProcess.Platform) === "win32";
+  const foldWorktreeCase = isWindows;
   const hostEnvironment = yield* HostProcess.Environment;
   const homeDir = yield* HostProcess.HomeDirectory;
   // `/private/tmp` is what macOS reports for sessions started in `/tmp`.
@@ -742,10 +759,7 @@ export const make = Effect.gen(function* () {
     path.join(homeDir, "Documents", "Codex"),
   ];
 
-  const isExcludedProjectPath = (
-    candidatePath: string,
-    managedDirectories: ReadonlyArray<string> = [worktreesDir],
-  ) =>
+  const isExcludedProjectPath = (candidatePath: string) =>
     excludedProjectRoots.has(normalizeProjectPathForComparison(candidatePath)) ||
     excludedProjectAncestors.some((ancestor) =>
       normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
@@ -755,7 +769,7 @@ export const make = Effect.gen(function* () {
     normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
       normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
     ) ||
-    isT3ManagedWorktree(candidatePath, managedDirectories, foldWorktreeCase);
+    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase);
 
   const listDirectory = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -778,94 +792,122 @@ export const make = Effect.gen(function* () {
     return `path:${normalizeProjectPathForComparison(realPath)}`;
   });
 
-  // Submodule pointers are repositories; linked-worktree pointers live under `worktrees/`.
-  const readGitDirectory = Effect.fn("AgentSessionScanner.readGitDirectory")(function* (
-    directory: string,
-  ) {
-    const gitPath = path.join(directory, ".git");
-    const gitStats = yield* statOption(gitPath);
-    if (Option.isNone(gitStats)) return { _tag: "NotGit" } as const;
-    if (gitStats.value.type === "Directory") {
-      return { _tag: "Repository", gitDir: gitPath } as const;
-    }
-    const pointer = yield* fileSystem.readFileString(gitPath).pipe(Effect.orElseSucceed(() => ""));
-    const target = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-    if (target === undefined || target.length === 0) return { _tag: "NotGit" } as const;
-    const gitDir = path.resolve(directory, target);
-    return /[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)
-      ? ({ _tag: "Worktree", gitDir } as const)
-      : ({ _tag: "Repository", gitDir } as const);
-  });
+  // Paths whose own read outlived the deadline, mapped to when they may be read
+  // again. Without this every later scan would wait out the deadline again for
+  // each phase that touches them.
+  const blockedGitFilePaths = new Map<string, number>();
 
-  const readGitIdentity = Effect.fn("AgentSessionScanner.readGitIdentity")(function* (
-    directory: string,
-  ): Effect.fn.Return<
-    | { readonly _tag: "Repository"; readonly git: AgentSessionProjectGit | null }
-    | { readonly _tag: "Worktree" }
-    | { readonly _tag: "NotGit" }
-  > {
-    const directoryInfo = yield* readGitDirectory(directory);
-    if (directoryInfo._tag === "NotGit") return directoryInfo;
-    let gitDir = directoryInfo.gitDir;
-    const linkedWorktree = directoryInfo._tag === "Worktree";
-    if (linkedWorktree) {
-      const commonDir = yield* fileSystem
-        .readFileString(path.join(gitDir, "commondir"))
-        .pipe(Effect.orElseSucceed(() => ""));
-      if (commonDir.trim().length === 0) return { _tag: "Worktree" } as const;
-      gitDir = path.resolve(gitDir, commonDir.trim());
-    }
-    const configText = yield* fileSystem
-      .readFileString(path.join(gitDir, "config"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    // Bare repositories have no main checkout, so offer their linked worktrees independently.
-    if (linkedWorktree && !isBareGitConfig(configText)) return { _tag: "Worktree" } as const;
-    const originUrl = parseOriginUrlFromGitConfig(configText);
-    return {
-      _tag: "Repository",
-      git: {
-        remoteKey:
-          originUrl === null ? null : sourceControlDefinitions.repositoryKeyFromRemote(originUrl),
-        repository: repositoryPathFromRemoteUrl(originUrl),
+  /** Reads small files without the libuv pool; "" when missing, unreadable or blocked. */
+  const readGitFiles = Effect.fn("AgentSessionScanner.readGitFiles")(function* (
+    filePaths: ReadonlyArray<string>,
+  ) {
+    const unique = Array.from(new Set(filePaths));
+    const now = yield* Clock.currentTimeMillis;
+    const contents = yield* Effect.forEach(
+      unique,
+      (filePath) => {
+        // No privacy prompts or FIFOs to block open() here.
+        if (isWindows) {
+          return fileSystem.readFileString(filePath).pipe(Effect.orElseSucceed(() => ""));
+        }
+        if ((blockedGitFilePaths.get(filePath) ?? 0) > now) return Effect.succeed("");
+        blockedGitFilePaths.delete(filePath);
+        return processRunner
+          .run({
+            command: "cat",
+            args: ["--", filePath],
+            timeout: GIT_FILE_READ_DEADLINE,
+            timeoutBehavior: "timedOutResult",
+            maxOutputBytes: MAX_GIT_FILE_BYTES,
+            outputMode: "truncate",
+          })
+          .pipe(
+            Effect.map((result) => {
+              if (result.timedOut) {
+                if (blockedGitFilePaths.size >= MAX_BLOCKED_GIT_FILE_PATHS) {
+                  blockedGitFilePaths.delete(blockedGitFilePaths.keys().next().value!);
+                }
+                blockedGitFilePaths.set(filePath, now + BLOCKED_GIT_FILE_RETRY_MS);
+              }
+              return result.code === 0 ? result.stdout : "";
+            }),
+            Effect.orElseSucceed(() => ""),
+          );
       },
-    } as const;
+      { concurrency: isWindows ? 1 : GIT_FILE_READ_CONCURRENCY },
+    );
+    return new Map(unique.map((filePath, index) => [filePath, contents[index]!]));
   });
 
-  const matchProjectCheckout = Effect.fn("AgentSessionScanner.matchProjectCheckout")(function* (
-    directory: string,
-    project: {
-      readonly identity: string;
-      readonly gitDirIdentity: string | null;
-      readonly managedDirectories: ReadonlyArray<string>;
-    },
+  /** Reads every directory's git identity in three phases of concurrent reads. */
+  const readGitIdentities = Effect.fn("AgentSessionScanner.readGitIdentities")(function* (
+    directories: ReadonlyArray<string>,
   ) {
-    const resolved = path.resolve(directory);
-    if (isExcludedProjectPath(resolved, project.managedDirectories)) {
-      return { _tag: "Unrelated" } as const;
+    type GitIdentity =
+      | { readonly _tag: "Repository"; readonly git: AgentSessionProjectGit | null }
+      | { readonly _tag: "Worktree" }
+      | { readonly _tag: "NotGit" };
+    const identities = new Map<string, GitIdentity>();
+    const repositories: Array<{ directory: string; gitDir: string; linkedWorktree: boolean }> = [];
+    const pointers: Array<{ directory: string; gitPath: string }> = [];
+    for (const directory of directories) {
+      const gitPath = path.join(directory, ".git");
+      const gitStats = yield* statOption(gitPath);
+      if (Option.isNone(gitStats)) identities.set(directory, { _tag: "NotGit" });
+      else if (gitStats.value.type === "Directory") {
+        repositories.push({ directory, gitDir: gitPath, linkedWorktree: false });
+      } else pointers.push({ directory, gitPath });
     }
-    if ((yield* directoryIdentity(resolved)) === project.identity) return { _tag: "Root" } as const;
-    if (project.gitDirIdentity === null) {
-      return { _tag: "Unrelated" } as const;
+
+    const pointerTexts = yield* readGitFiles(pointers.map(({ gitPath }) => gitPath));
+    const linkedWorktrees: Array<{ directory: string; gitDir: string }> = [];
+    for (const { directory, gitPath } of pointers) {
+      const target = /^gitdir:\s*(.+)$/m.exec(pointerTexts.get(gitPath) ?? "")?.[1]?.trim();
+      if (target === undefined || target.length === 0) {
+        identities.set(directory, { _tag: "NotGit" });
+        continue;
+      }
+      const gitDir = path.resolve(directory, target);
+      if (/[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitDir)) {
+        linkedWorktrees.push({ directory, gitDir });
+      } else repositories.push({ directory, gitDir, linkedWorktree: false });
     }
-    const gitDirectory = yield* readGitDirectory(resolved);
-    if (gitDirectory._tag !== "Worktree") return { _tag: "Unrelated" } as const;
-    const realPath = yield* fileSystem
-      .realPath(resolved)
-      .pipe(Effect.orElseSucceed(() => resolved));
-    if (isExcludedProjectPath(realPath, project.managedDirectories)) {
-      return { _tag: "Unrelated" } as const;
+
+    const commonDirTexts = yield* readGitFiles(
+      linkedWorktrees.map(({ gitDir }) => path.join(gitDir, "commondir")),
+    );
+    for (const { directory, gitDir } of linkedWorktrees) {
+      const commonDir = (commonDirTexts.get(path.join(gitDir, "commondir")) ?? "").trim();
+      if (commonDir.length === 0) identities.set(directory, { _tag: "Worktree" });
+      else
+        repositories.push({
+          directory,
+          gitDir: path.resolve(gitDir, commonDir),
+          linkedWorktree: true,
+        });
     }
-    const commonDir = yield* fileSystem
-      .readFileString(path.join(gitDirectory.gitDir, "commondir"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    if (
-      commonDir.trim() === "" ||
-      (yield* directoryIdentity(path.resolve(gitDirectory.gitDir, commonDir.trim()))) !==
-        project.gitDirIdentity
-    ) {
-      return { _tag: "Unrelated" } as const;
+
+    const configTexts = yield* readGitFiles(
+      repositories.map(({ gitDir }) => path.join(gitDir, "config")),
+    );
+    for (const { directory, gitDir, linkedWorktree } of repositories) {
+      const configText = configTexts.get(path.join(gitDir, "config")) ?? "";
+      // Bare repositories have no main checkout, so offer their linked worktrees independently.
+      if (linkedWorktree && !isBareGitConfig(configText)) {
+        identities.set(directory, { _tag: "Worktree" });
+        continue;
+      }
+      const originUrl = parseOriginUrlFromGitConfig(configText);
+      identities.set(directory, {
+        _tag: "Repository",
+        git: {
+          remoteKey:
+            originUrl === null ? null : sourceControlDefinitions.repositoryKeyFromRemote(originUrl),
+          repository: repositoryPathFromRemoteUrl(originUrl),
+        },
+      });
     }
-    return { _tag: "Worktree", path: resolved, gitDir: gitDirectory.gitDir } as const;
+    return identities;
   });
 
   const readCwd = Effect.fn("AgentSessionScanner.readCwd")(function* (
@@ -954,7 +996,6 @@ export const make = Effect.gen(function* () {
   const readTranscript = Effect.fn("AgentSessionScanner.readTranscript")(function* (
     filePath: string,
     expected: ReturnType<typeof transcriptIdentity>,
-    recordLimit: number,
     source: AgentSessionSource,
   ) {
     if (expected.size > MAX_IMPORTED_TRANSCRIPT_BYTES) return null;
@@ -988,7 +1029,7 @@ export const make = Effect.gen(function* () {
             const finishRecord = () => {
               reader.write(decoder.decode());
               recordCount += 1;
-              if (recordCount > recordLimit) return false;
+              if (recordCount > MAX_IMPORT_RECORDS) return false;
               const value = reader.finish();
               const decoded = decodeTranscriptValue(value);
               if (Option.isNone(decoded) && source === "pi") {
@@ -1048,7 +1089,7 @@ export const make = Effect.gen(function* () {
 
             if (recordStarted && !(yield* Effect.try(finishRecord))) return null;
             return sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))
-              ? { records, recordCount, cwd, claudeFields }
+              ? { records, cwd, claudeFields }
               : null;
           }),
         ),
@@ -1315,9 +1356,11 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
-    settings: ContractServerSettings,
-  ) {
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
+    );
+
     const raw: Array<RawCandidate> = [];
     let truncated = false;
 
@@ -1440,7 +1483,7 @@ export const make = Effect.gen(function* () {
   let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
 
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    const { candidates: raw, truncated } = yield* collectCandidates(yield* readSettings);
+    const { candidates: raw, truncated } = yield* collectCandidates();
     cachedCandidates = raw;
 
     const merged = new Map<
@@ -1453,6 +1496,30 @@ export const make = Effect.gen(function* () {
         git: AgentSessionProjectGit | null;
       }
     >();
+    // Resolve every candidate directory first so one batch reads all git identities.
+    const directories = new Map<string, Option.Option<FileSystem.File.Info>>();
+    for (const candidate of raw) {
+      const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
+      if (!path.isAbsolute(expanded)) continue;
+      const resolved = path.resolve(expanded);
+      if (directories.has(resolved) || isExcludedProjectPath(resolved)) continue;
+      const stats = yield* statOption(resolved);
+      if (Option.isNone(stats) || stats.value.type !== "Directory") {
+        directories.set(resolved, Option.none());
+        continue;
+      }
+      const realPath = yield* fileSystem
+        .realPath(resolved)
+        .pipe(Effect.orElseSucceed(() => resolved));
+      // Symlinks can disguise excluded worktree paths; re-check their targets.
+      directories.set(resolved, isExcludedProjectPath(realPath) ? Option.none() : stats);
+    }
+    const directoryGitIdentities = yield* readGitIdentities(
+      Array.from(directories).flatMap(([directory, stats]) =>
+        Option.isSome(stats) ? [directory] : [],
+      ),
+    );
+
     const directoryKeys = new Map<string, string>();
     const gitIdentities = new Map<string, AgentSessionProjectGit | null>();
 
@@ -1460,28 +1527,16 @@ export const make = Effect.gen(function* () {
       const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);
-      if (isExcludedProjectPath(resolved)) continue;
+      const stats = directories.get(resolved);
+      if (stats === undefined || Option.isNone(stats)) continue;
       let key = directoryKeys.get(resolved);
       if (key === undefined) {
-        const stats = yield* statOption(resolved);
-        if (Option.isNone(stats) || stats.value.type !== "Directory") {
-          directoryKeys.set(resolved, "");
-          continue;
-        }
-        const realPath = yield* fileSystem
-          .realPath(resolved)
-          .pipe(Effect.orElseSucceed(() => resolved));
-        // Symlinks can disguise excluded worktree paths; re-check their targets.
-        if (isExcludedProjectPath(realPath)) {
+        const gitIdentity = directoryGitIdentities.get(resolved);
+        if (gitIdentity === undefined || gitIdentity._tag === "Worktree") {
           key = "";
         } else {
-          const gitIdentity = yield* readGitIdentity(resolved);
-          if (gitIdentity._tag === "Worktree") {
-            key = "";
-          } else {
-            key = yield* directoryIdentity(resolved, stats.value);
-            gitIdentities.set(key, gitIdentity._tag === "Repository" ? gitIdentity.git : null);
-          }
+          key = yield* directoryIdentity(resolved, stats.value);
+          gitIdentities.set(key, gitIdentity._tag === "Repository" ? gitIdentity.git : null);
         }
         directoryKeys.set(resolved, key);
       }
@@ -1565,34 +1620,11 @@ export const make = Effect.gen(function* () {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
-    const settings = yield* readSettings;
-    const managedDirectories = (yield* Effect.forEach(
-      managedWorktreesDirectories(settings, worktreesDir, path, homeDir),
-      (directory) => {
-        const resolved = path.resolve(directory);
-        return fileSystem.realPath(resolved).pipe(
-          Effect.orElseSucceed(() => resolved),
-          Effect.map((real) => (isFilesystemRoot(real, path) ? [] : [resolved, real])),
-        );
-      },
-    )).flat();
-    if (
-      isExcludedProjectPath(root, managedDirectories) ||
-      isExcludedProjectPath(realRoot, managedDirectories)
-    ) {
-      return Stream.empty;
-    }
-    const rootGit = yield* readGitDirectory(root);
-    const project = {
-      managedDirectories,
-      identity: yield* directoryIdentity(root),
-      gitDirIdentity:
-        rootGit._tag === "Repository" ? yield* directoryIdentity(rootGit.gitDir) : null,
-    };
+    const rootIdentity = yield* directoryIdentity(root);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
-    const candidates = cachedCandidates ?? (yield* collectCandidates(settings)).candidates;
+    const candidates = cachedCandidates ?? (yield* collectCandidates()).candidates;
     cachedCandidates = candidates;
 
     const eligibleTranscripts: Array<{
@@ -1602,7 +1634,8 @@ export const make = Effect.gen(function* () {
     for (const candidate of candidates) {
       const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
-      if ((yield* matchProjectCheckout(expanded, project))._tag === "Unrelated") continue;
+      const resolved = path.resolve(expanded);
+      if ((yield* directoryIdentity(resolved)) !== rootIdentity) continue;
 
       for (const transcript of candidate.transcripts) {
         if (
@@ -1634,17 +1667,13 @@ export const make = Effect.gen(function* () {
     const codexThreadNamesByHome = new Map<string, ReadonlyMap<string, string>>();
     let bytesRemaining = MAX_IMPORT_BYTES;
     let transcriptsRemaining = MAX_IMPORT_TRANSCRIPTS;
-    let recordsRemaining = MAX_IMPORT_RECORDS;
     return Stream.fromIteratorSucceed(eligibleTranscripts.values(), 1).pipe(
       Stream.mapEffect(({ candidate, transcript }) =>
         Effect.gen(function* () {
           const completed = completedByFile.get(
             `${candidate.providerInstanceId}\0${transcript.filePath}`,
           );
-          if (
-            completed === undefined &&
-            (transcriptsRemaining === 0 || bytesRemaining === 0 || recordsRemaining === 0)
-          ) {
+          if (completed === undefined && (transcriptsRemaining === 0 || bytesRemaining === 0)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
           const stats = yield* statOption(transcript.filePath);
@@ -1667,7 +1696,6 @@ export const make = Effect.gen(function* () {
           }
           if (
             transcriptsRemaining === 0 ||
-            recordsRemaining === 0 ||
             identity.size > MAX_IMPORTED_TRANSCRIPT_BYTES ||
             identity.size > bytesRemaining
           ) {
@@ -1675,26 +1703,19 @@ export const make = Effect.gen(function* () {
           }
           transcriptsRemaining -= 1;
           bytesRemaining -= identity.size;
-          const snapshot = yield* readTranscript(
-            transcript.filePath,
-            identity,
-            recordsRemaining,
-            candidate.source,
-          );
+          const snapshot = yield* readTranscript(transcript.filePath, identity, candidate.source);
           if (snapshot === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          recordsRemaining -= snapshot.recordCount;
 
           if (Option.isNone(snapshot.cwd)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
           const expandedCwd = expandHomePath(snapshot.cwd.value.trim(), homeDir);
-          if (!path.isAbsolute(expandedCwd)) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
-          }
-          const checkout = yield* matchProjectCheckout(expandedCwd, project);
-          if (checkout._tag === "Unrelated") {
+          if (
+            !path.isAbsolute(expandedCwd) ||
+            (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity
+          ) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
 
@@ -1731,24 +1752,11 @@ export const make = Effect.gen(function* () {
             return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
           }
           importedSessions.add(sessionKey);
-          const head =
-            checkout._tag === "Worktree"
-              ? yield* fileSystem
-                  .readFileString(path.join(checkout.gitDir, "HEAD"))
-                  .pipe(Effect.orElseSucceed(() => ""))
-              : "";
           return Option.some<AgentSessionRecentThread>({
             _tag: "Importable",
             thread:
               savedTitle === undefined ? parsedThread : { ...parsedThread, title: savedTitle },
             source,
-            worktree:
-              checkout._tag === "Worktree"
-                ? {
-                    path: checkout.path,
-                    branch: /^ref: refs\/heads\/(.+)$/.exec(head.trim())?.[1] ?? null,
-                  }
-                : null,
           });
         }).pipe(importReadLock.withPermits(1)),
       ),
@@ -1765,4 +1773,6 @@ export const make = Effect.gen(function* () {
   return AgentSessionScanner.of({ scan, recentThreads });
 });
 
-export const layer = Layer.effect(AgentSessionScanner, make);
+export const layer = Layer.effect(AgentSessionScanner, make).pipe(
+  Layer.provide(ProcessRunner.layer),
+);
