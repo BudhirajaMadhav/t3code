@@ -31,7 +31,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { NavigationHistoryButtons } from "./NavigationHistoryButtons";
 import { ResourcesChip } from "./ResourcesPopover";
 import {
   WorkspaceBreadcrumb,
@@ -432,7 +431,6 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
-      <NavigationHistoryButtons />
       <ResourcesChip environmentId={activeThreadEnvironmentId} />
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
