@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Fork-only UI, English only; not in the upstream catalogs. */
 import {
   AuthEnvironmentMaintainScope,
   type EnvironmentId,

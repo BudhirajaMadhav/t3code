@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Fork-only UI, English only; not in the upstream catalogs. */
 import type {
   EnvironmentId,
   ProviderContextBreakdown,
@@ -7,12 +8,13 @@ import type {
   ThreadId,
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
-import { limitsNotice } from "@t3tools/shared/usageLimits";
+import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 import { Minimize2Icon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
+import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { readContextBreakdown } from "~/state/contextBreakdown";
@@ -29,7 +31,7 @@ import {
   formatCacheLifetime,
   threadAccount,
 } from "./composerContext.logic";
-import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
+import { formatContextWindowCompactionMessage } from "./compaction.logic";
 
 /** What ChatView knows about the open thread that the composer does not. */
 export interface ComposerContextData {
@@ -45,6 +47,7 @@ export interface ComposerContextData {
     readonly ttlMs: number | undefined;
   } | null;
   readonly isWorking: boolean;
+  readonly contextWindow: ContextWindowSnapshot | null;
 }
 
 const CLAUDE_DRIVER = "claudeAgent";
@@ -78,10 +81,8 @@ export function ComposerContextControl(props: {
   readonly data: ComposerContextData;
   readonly usage: ContextWindowSnapshot;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly modelDisplayName: string | null;
   readonly onCompact?: (() => void) | undefined;
   readonly compactDisabled: boolean;
-  readonly compactDisabledReason: string | null;
 }) {
   const { data, usage } = props;
   const expiresAtMs = data.promptCache?.expiresAtMs ?? null;
@@ -186,10 +187,8 @@ function ContextPopoverBody(props: {
   readonly data: ComposerContextData;
   readonly usage: ContextWindowSnapshot;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly modelDisplayName: string | null;
   readonly onCompact?: (() => void) | undefined;
   readonly compactDisabled: boolean;
-  readonly compactDisabledReason: string | null;
 }) {
   const { data, usage } = props;
   // The popup mounts on open, so this is the moment the popover was opened.
@@ -232,10 +231,7 @@ function ContextPopoverBody(props: {
         ) : null}
         {usage.compactsAutomatically ? (
           <div className="text-pretty text-secondary-label text-2xs">
-            {formatContextWindowCompactionMessage(
-              props.modelDisplayName,
-              usage.autoCompactThreshold,
-            )}
+            {formatContextWindowCompactionMessage(usage.autoCompactThreshold)}
           </div>
         ) : null}
       </Section>
@@ -301,11 +297,6 @@ function ContextPopoverBody(props: {
             <Minimize2Icon aria-hidden="true" />
             Compact context
           </Button>
-          {props.compactDisabled && props.compactDisabledReason ? (
-            <div className="text-pretty text-secondary-label text-2xs">
-              {props.compactDisabledReason}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>
